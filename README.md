@@ -1,6 +1,6 @@
 Posita
 
-Explicit. Static. Safe.
+Explicit. Static. Verified.
 
 Posita is a systems programming language designed for safety‑critical domains where every bit of representation, every overflow policy, and every error path must be explicitly stated and statically verified. It combines Ada’s precision, Rust’s modern type system, and compile‑time verification powered by SMT solvers to eliminate undefined behaviour without runtime overhead.
 
