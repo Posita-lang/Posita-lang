@@ -1,15 +1,15 @@
 # Posita Language Syntax
-**Document revision: 2026-06-28** (working draft, not a frozen specification)
+**Document revision: 2026-07-10** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
-> Posita itself is in pre-alpha; the syntax is under active design and may change without notice.
+> Posita itself is in pre‑alpha; the syntax is under active design and may change without notice.
 
 ## Design Philosophy
-Posita is a **ultra-static, systems programming language** where the programmer explicitly *posits* every representation detail: bit widths, pointer sizes, default values, error paths, overflow behavior, and even resource consumption protocols. All decisions are made visible in source and enforced at compile time with zero runtime overhead.
+Posita is a **ultra‑static, systems programming language** where the programmer explicitly *posits* every representation detail: bit widths, pointer sizes, default values, error paths, overflow behavior, and even resource consumption protocols. All decisions are made visible in source and enforced at compile time with zero runtime overhead.
 
-- **Explicit over implicit**: No hidden ABI, no type-erased errors, no null pointers, no implicit overflow, no invisible allocations. All critical semantic effects—compile-time execution (`!`), error propagation (`?`), asynchronous suspension (`await`)—are marked with dedicated syntax at the point of use. Unsafe operations are confined to functions marked `@trusted` at the point of declaration, establishing explicit trust boundaries. Reviewers can see every important behavior without reading function definitions.
-- **Compile-time over run-time**: Error handling, defaults, optimizations, reflection, and resource tracking are resolved statically. A function may optionally defer contract checking to runtime via `@runtime_check`.
+- **Explicit over implicit**: No hidden ABI, no type‑erased errors, no null pointers, no implicit overflow, no invisible allocations. All critical semantic effects—compile‑time execution (`!`), error propagation (`?`), asynchronous suspension (`await`)—are marked with dedicated syntax at the point of use. Unsafe operations are confined to functions marked `@trusted` at the point of declaration, establishing explicit trust boundaries. Reviewers can see every important behavior without reading function definitions.
+- **Compile‑time over run‑time**: Error handling, defaults, optimizations, reflection, and resource tracking are resolved statically. A function may optionally defer contract checking to runtime via `@runtime_check`.
 - **Readable as documentation**: English keywords (`def`, `set`, `leave`, `catch`), not cryptic symbols. Specification tags (`@spec`, `@requirement`, `@rationale`) link code directly to system requirements.
 - **No undefined behavior in safe code**: Every operation either succeeds with defined semantics or is rejected at compile time.
 
@@ -21,24 +21,24 @@ Posita is a **ultra-static, systems programming language** where the programmer 
 `def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`,
 `comptime`, `import`, `as`, `true`, `false`, `auto`, `and`, `or`, `not`, `sizeof`, `alignof`,
 `catch`, `panic`, `unsafe`, `let`, `finally`,
-`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `overrides`
+`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `overrides`, `layout`
 
-`Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built-in type constructors, not reserved words.  
+`Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words.  
 `linear`, `consume` are planned keywords; `by` is reserved for future use.
 
 ### Identifiers
-`[a-zA-Z_][a-zA-Z0-9_]*`
+`[a‑zA‑Z_][a‑zA‑Z0‑9_]*`
 
 ### Literals
 - Integers: `42`, `0xFF`, `0b1010`
-- Integer suffixes for explicit bit-width: `42i32` (equivalent to `42: Int<32>`), `0xFFu8` (equivalent to `0xFF: UInt<8>`). The suffix is syntactic sugar and the type is fully checked.
+- Integer suffixes for explicit bit‑width: `42i32` (equivalent to `42: Int<32>`), `0xFFu8` (equivalent to `0xFF: UInt<8>`). The suffix is syntactic sugar and the type is fully checked.
 - Floats: `3.14`, `2.5e-3` (type `Float<64>` by default)
-- Characters: `'a'` (UTF-8, type `UInt<8>`)
+- Characters: `'a'` (UTF‑8, type `UInt<8>`)
 - Byte strings: `b"hello\n"` (type `&[Byte]`, see Escape Sequences)
-- Strings: `"hello"` (type `&Str`, guaranteed valid UTF-8, see Escape Sequences)
+- Strings: `"hello"` (type `&Str`, guaranteed valid UTF‑8, see Escape Sequences)
 - Booleans: `true`, `false`
 
-**Type-annotated literals**: Any literal may be annotated with a type using the `: Type` syntax. For integer literals, this includes refined types (e.g., `1: PositiveInt`). The compiler checks at compile time that the literal satisfies the target type's invariants; failure is a compile-time error. This annotation is particularly useful for disambiguating generic or overloaded contexts, and for initializing refined types without relying on type inference from a variable declaration.
+**Type‑annotated literals**: Any literal may be annotated with a type using the `: Type` syntax. For integer literals, this includes refined types (e.g., `1: PositiveInt`). The compiler checks at compile time that the literal satisfies the target type's invariants; failure is a compile‑time error. This annotation is particularly useful for disambiguating generic or overloaded contexts, and for initializing refined types without relying on type inference from a variable declaration.
 
 ```posita
 set one: PositiveInt = 1;               // type inferred from declaration
@@ -59,11 +59,11 @@ The following escape sequences are recognized in string literals, byte string li
 | `\'` | Single Quote | 0x27 |
 | `\0` | Null Character | 0x00 |
 | `\xNN` | Hex Byte (2 digits) | 0xNN |
-| `\u{NNNNNN}` | Unicode Scalar (1-6 hex digits) | UTF-8 encoded bytes |
+| `\u{NNNNNN}` | Unicode Scalar (1‑6 hex digits) | UTF‑8 encoded bytes |
 
 In character literals (`'...'`), the escape must resolve to exactly one valid Unicode scalar value.
 
-In byte strings (`b"..."`) and byte characters, `\u{...}` is not valid (byte strings contain raw bytes, not UTF-8).
+In byte strings (`b"..."`) and byte characters, `\u{...}` is not valid (byte strings contain raw bytes, not UTF‑8).
 
 The sequences `\a`, `\b`, `\v`, `\f`, and `\?` are not recognized in Posita string literals. If needed, use the equivalent `\xNN` form.
 
@@ -71,7 +71,7 @@ The sequences `\a`, `\b`, `\v`, `\f`, and `\?` are not recognized in Posita stri
 - Line comment: `// ...`
 - Block comment: `/* ... */`
 - Documentation comment: `/// ...` (Markdown, code examples are automatically verified as `@comptime_test`)
-- Module-level documentation comment: `//! ...` (applies to the enclosing module)
+- Module‑level documentation comment: `//! ...` (applies to the enclosing module)
 
 ---
 
@@ -203,11 +203,11 @@ The following are rejected at compile time:
 
 The compiler emits a diagnostic if the result of pointer arithmetic can be statically proven to be misaligned for the `pointee` type. For runtime offsets, the programmer must guarantee alignment via contract or manual assertion; violation results in undefined behavior.
 
-Bounds checking is **never** performed for pointer arithmetic. Use array types (`[T; N]`) or slices (`&[T]`) for safe, bounds-checked indexing.
+Bounds checking is **never** performed for pointer arithmetic. Use array types (`[T; N]`) or slices (`&[T]`) for safe, bounds‑checked indexing.
 
 **Minimum addressable unit**
 
-References (`&T`, `&mut T`) and pointers (`*T`, `Ptr<pointee = T>`) require `T` to have a bit-width of at least 8. Types narrower than one byte (e.g., `Int<3>`, `UInt<4>`) are value-only types and cannot be the target of a reference or pointer. Bit-fields in `@packed` structs are accessed through the enclosing struct, not by direct reference.
+References (`&T`, `&mut T`) and pointers (`*T`, `Ptr<pointee = T>`) require `T` to have a bit‑width of at least 8. Types narrower than one byte (e.g., `Int<3>`, `UInt<4>`) are value‑only types and cannot be the target of a reference or pointer. Bit‑fields in `@packed` structs are accessed through the enclosing struct, not by direct reference.
 
 ### Explicit Lifetime Parameters
 When the compiler cannot infer lifetimes, you may annotate them explicitly:
@@ -329,6 +329,8 @@ Fine‑grained control for hardware registers and protocols:
 - **Bit order**: `@bit_order(lsb_to_msb)` or `@bit_order(msb_to_lsb)`. This attribute only applies to bit‑fields inside `@packed` structs.
 - **Alignment**: `@align(N)` overrides natural alignment. `N` must be a power of two.
 - **Padding**: `@pad(byte_count)` inserts explicit padding bytes.
+- **C ABI compatibility**: `@layout(C)` forces the struct to follow the target platform's C ABI rules for field alignment, padding, and trailing size. This is required for any struct passed across an `extern "C"` boundary.
+- **Newtype transparency**: `@transparent` guarantees that a single‑field struct has exactly the same layout as its field's type. This is essential for newtype wrappers that must be ABI‑compatible with the inner type.
 
 Example:
 ```posita
@@ -341,6 +343,62 @@ type IPv4Header = struct {
 };
 ```
 Posita natively supports bit‑fields (`UInt<4>`, etc.) inside `@packed` structs. The `@bit_order` attribute controls the order in which bit‑fields fill bytes.
+
+#### Layout Aliases (`layout` keyword)
+
+To avoid repetitive attribute lists, Posita allows defining named combinations of the above layout attributes using the `layout` keyword. A layout alias is a pure, declaration‑time shorthand for a set of built‑in layout attributes. It introduces no new semantics and cannot contain any executable logic.
+
+**Syntax**:
+```posita
+layout Name {
+    attribute1,
+    attribute2,
+    ...;
+}
+```
+The body consists of a comma‑separated list of built‑in layout attributes (`packed`, `little_endian`, `big_endian`, `bit_order(lsb_to_msb)`, `bit_order(msb_to_lsb)`, `align(N)`, `pad(N)`, `C`, `transparent`). The list is terminated by a semicolon. The order of attributes is immaterial; the compiler normalizes their application.
+
+**Restrictions**:
+- A layout alias **may only reference built‑in attributes**; it cannot contain expressions, conditionals, loops, or calls to any function.
+- A layout alias **cannot reference other layout aliases** (no nesting). This guarantees that any alias can be trivially inlined to its constituent built‑in attributes.
+- The `@layout` attribute applied to a type accepts either the built‑in identifier `C` or a previously defined layout alias name.
+
+**Example**:
+```posita
+layout MmioLayout {
+    packed,
+    little_endian,
+    bit_order(lsb_to_msb);
+}
+
+@layout(MmioLayout)
+type UartCtrl = struct {
+    ctrl: UInt<8>,
+    data: UInt<32>,
+};
+
+// Equivalent explicit form:
+// @packed @endian(little) @bit_order(lsb_to_msb)
+// type UartCtrl = struct { ... };
+```
+
+**Usage with `@layout(C)`**:
+The `@layout` attribute on a type definition is used both for referencing a defined alias and for the special built‑in `C` layout. The compiler distinguishes based on whether the argument is the identifier `C` (a reserved built‑in) or a user‑defined layout name.
+
+```posita
+@layout(C)          // Built‑in C ABI layout
+type CCompat = struct { x: Int<32>, y: Int<64> };
+
+layout CompactIo {
+    packed,
+    little_endian;
+}
+
+@layout(CompactIo)  // User‑defined layout alias
+type IoReg = struct { flags: UInt<8>, addr: UInt<32> };
+```
+
+**Auditability**: The compiler expands all layout aliases at their use sites. Tools like `capsa audit` and IDE hover information display the fully expanded attribute set, ensuring that the effective layout is always visible at the type definition.
 
 ### Language Attributes
 The following attributes are not layout‑specific but affect language semantics or tooling behavior:
@@ -367,20 +425,20 @@ The following attributes are not layout‑specific but affect language semantics
 | `@alloc` | Function | May perform dynamic memory allocation |
 | `@no_alloc` | Function | Guarantees no dynamic allocation. This implies `@no_alloc_error`; redundant declaration of both is allowed but not required. |
 | `@no_alloc_error` | Function | Guarantees no allocation on error paths, including `From` conversions. May coexist with `@alloc` (normal paths may allocate while error paths must not). |
-| `@no_panic` | Function | Guarantees the function never panics; compiler verifies no `trap`, bounds checks, or calls to non‑`@no_panic` functions. Verification failure is a compile-time error in strict mode; in non-strict mode, the compiler emits a warning and may instrument unproven checks with a runtime panic guard. |
+| `@no_panic` | Function | Guarantees the function never panics; compiler verifies no `trap`, bounds checks, or calls to non‑`@no_panic` functions. Verification failure is a compile‑time error in strict mode; in non‑strict mode, the compiler emits a warning and may instrument unproven checks with a runtime panic guard. |
 | `@runtime_check` | Function | Defers contract checking to runtime, even if arguments are compile‑time known. Only allowed in non‑strict mode. |
 | `@cfg(condition)` | Module, Function | Conditional compilation with `all`, `any`, `not` combinators. The condition may refer to target platform, features, etc. Only paths that compile under the configuration are permitted in strict mode. |
 | `@hint(assertion)` | Function, Loop | Provides a hint to the SMT solver to guide proof search. Hints must be accompanied by a meta‑contract that proves the hint itself is valid. Example: `@hint(forall i in 0..len: arr[i] > 0)` asserts all elements are positive within the given function or loop. |
 | `@exhaustive` | Enum | Requires all `match`, `if let`, and `while let` on the enum to be exhaustive. |
 | `@debug_info` | Function, Module | Controls which symbols are emitted into debug information. Supports minimal exposure for safety‑critical deployments. |
 | `@audit_log` | Function | Marks a function whose runtime contract violations must be written to an immutable audit log. The storage backend is defined by the standard library; tamper‑evident integrity (e.g., hash chains) is strongly recommended. |
-| `@interrupt(irq, priority?)` | Function | Marks an interrupt handler. The compiler enforces that the function satisfies the constraints of `@no_alloc`, `@no_panic`, and return type `!`; violations are compile-time errors. Redundant explicit `@no_alloc` or `@no_panic` annotations are allowed and produce no warning. See "Interrupts" for full constraints. |
+| `@interrupt(irq, priority?)` | Function | Marks an interrupt handler. The compiler enforces that the function satisfies the constraints of `@no_alloc`, `@no_panic`, and return type `!`; violations are compile‑time errors. Redundant explicit `@no_alloc` or `@no_panic` annotations are allowed and produce no warning. See "Interrupts" for full constraints. |
 | `@ieee_contracts` | Function | Interprets all floating‑point `requires` and `ensures` clauses on this function under IEEE 754 semantics instead of the default mathematical real domain. This attribute is not inherited by callees. |
 | `@diverges` | Function | Declares that this function never returns normally. The function's return type may be any `T` (not just `!`), but all reachable paths in the body must diverge (e.g., `loop {}`, hardware halt). The compiler verifies divergence in strict mode. `@diverges` is incompatible with `panic` in the function body (divergence must be deterministic). Compatible with `@no_panic` (non‑panic divergence) and `@trusted`. Not compatible with `@runtime_check`. |
 
 **Implicit relationships among attributes**:
 
-- `@no_alloc` implies `@no_alloc_error`; a function that never allocates trivially satisfies the no-allocation-on-error constraint.
+- `@no_alloc` implies `@no_alloc_error`; a function that never allocates trivially satisfies the no‑allocation‑on‑error constraint.
 - `@no_alloc_error` may coexist with `@alloc`; normal paths may allocate while error paths must not.
 
 **Attribute compatibility and precedence**: When multiple attributes are combined, the compiler follows a strict ordering:
@@ -430,7 +488,7 @@ comptime {
 - **Type capture**:
   ```posita
   set auto<T> = expression;          // capture type only
-  set auto<T, N> = expression;       // capture type and compile-time constant
+  set auto<T, N> = expression;       // capture type and compile‑time constant
   set auto<T, N, L> = expression;    // multiple captures (types and/or constants)
   ```
   Binds the compile‑time entities (types or compile‑time constant values) of `expression` to the names inside the angle brackets, making them available for reflection, assertion, or type factory usage in subsequent `comptime` blocks. Capture names are immutable and scoped to the enclosing block. The comma‑separated list follows the same syntax as generic type parameters. For a concrete usage example, see `make_employee_report` in the Complete Example section.
@@ -482,7 +540,7 @@ Functions may be annotated with fine‑grained effect markers to describe their 
 - **`@alloc`**: The function may perform dynamic memory allocation. May coexist with `@no_alloc_error`.
 - **`@no_alloc`**: The function guarantees no dynamic allocation. This implies `@no_alloc_error`.
 - **`@no_alloc_error`**: The function guarantees no allocation on any error path. All `From` conversions reachable via `?` in error paths must also be `@no_alloc`. May coexist with `@alloc`.
-- **`@no_panic`**: The function never panics. The compiler statically verifies the absence of overflow traps, bounds‑check failures, or calls to non‑`@no_panic` functions. Verification failure is a compile-time error in strict mode; in non-strict mode, the compiler emits a warning and may instrument unproven checks with a runtime panic guard. Callers are not required to be `@no_panic` themselves; the guarantee is internal to the function body.
+- **`@no_panic`**: The function never panics. The compiler statically verifies the absence of overflow traps, bounds‑check failures, or calls to non‑`@no_panic` functions. Verification failure is a compile‑time error in strict mode; in non‑strict mode, the compiler emits a warning and may instrument unproven checks with a runtime panic guard. Callers are not required to be `@no_panic` themselves; the guarantee is internal to the function body.
 - **`@diverges`**: The function never returns normally. The return type may be any `T`, but all reachable paths must diverge deterministically (e.g., `loop {}`, hardware halt). Functions marked `@diverges` must not contain reachable `panic` calls. Compatible with `@no_panic` (non‑panic divergence) and `@trusted`.
 - **`@trusted`**: The function contains operations the compiler cannot fully verify (`unsafe` blocks, raw pointer manipulation, `extern "C"` calls, or dynamic dispatch via `dyn Trait` in strict mode) and establishes a trust boundary; it must carry `requires`/`ensures` contracts.
 - **`@audit_log`**: The function must write any runtime contract violation to an immutable audit log. The log storage backend is provided by the standard library; tamper‑evident integrity (e.g., hash chains) is strongly recommended.
@@ -501,7 +559,7 @@ In Strict Mode, `unsafe` blocks are completely forbidden, guaranteeing UB‑free
 `@trusted` functions may call other `@trusted` functions, but the entire call chain is tracked by `capsa audit`. In strict mode, every `@trusted` function must be accompanied by either `@link_proof` referencing an external formal proof, or at least one `@comptime_test` exercising its safety contract. If neither is present, compilation fails. If neither is possible, the dependency must be explicitly marked as `trusted = true` in `posita.toml`, indicating that it has been manually audited.
 
 ### Dynamic Dispatch in Strict Mode
-In strict mode, the construction and invocation of `dyn Trait` objects require a `@trusted` context. Because the concrete implementation type is resolved at runtime, the compiler cannot statically verify contracts or perform exhaustive control-flow analysis through the dispatch site. By confining dynamic dispatch to `@trusted` functions, the trust boundary is made explicit, and the programmer must provide `requires`/`ensures` contracts that cover all possible implementations.
+In strict mode, the construction and invocation of `dyn Trait` objects require a `@trusted` context. Because the concrete implementation type is resolved at runtime, the compiler cannot statically verify contracts or perform exhaustive control‑flow analysis through the dispatch site. By confining dynamic dispatch to `@trusted` functions, the trust boundary is made explicit, and the programmer must provide `requires`/`ensures` contracts that cover all possible implementations.
 
 Outside of `@trusted` code, `dyn Trait` is rejected in strict mode. In non‑strict mode, dynamic dispatch is permitted but flagged during audit for mandatory review.
 
@@ -598,7 +656,7 @@ Associated types are accessed via the `::` operator: `T::Output`. In `where` cla
 
 ### Operator Desugaring
 
-User-defined operator overloading is achieved by implementing the corresponding built-in trait. The compiler desugars operators according to the following table:
+User‑defined operator overloading is achieved by implementing the corresponding built‑in trait. The compiler desugars operators according to the following table:
 
 | Expression | Desugars to                     | Trait       |
 |------------|---------------------------------|-------------|
@@ -619,9 +677,9 @@ User-defined operator overloading is achieved by implementing the corresponding 
 
 Overload resolution follows method lookup rules: the compiler searches for an `impl` of the corresponding trait in the current scope and in the defining modules of the operand types. No implicit type coercion is performed to satisfy operator resolution; all operand types must match exactly.
 
-Overflow-suffixed operators (`+%`, `+?`, `+!`) are **not** overloadable; they are compiler intrinsics that apply the overflow policy after the underlying addition.
+Overflow‑suffixed operators (`+%`, `+?`, `+!`) are **not** overloadable; they are compiler intrinsics that apply the overflow policy after the underlying addition.
 
-The error propagation operator `?`, the compile-time call marker `!`, and the `as`/`as!` casts are not part of the trait system; they are compiler-defined operations.
+The error propagation operator `?`, the compile‑time call marker `!`, and the `as`/`as!` casts are not part of the trait system; they are compiler‑defined operations.
 
 ### Dynamic Dispatch
 When static dispatch is not possible (e.g., heterogeneous collections), the `dyn` keyword creates a trait object: `dyn Trait`. Trait objects use dynamic dispatch via a vtable and may incur a heap allocation. Their use is explicit to ensure reviewers can identify runtime dispatch points.
@@ -630,7 +688,7 @@ When static dispatch is not possible (e.g., heterogeneous collections), the `dyn
 let handlers: [dyn Fn(Int<32>) -> Int<32>; 10];
 ```
 
-**Restrictions in strict mode**: In strict mode, constructing or calling through a `dyn Trait` object is only allowed inside `@trusted` functions, because the compiler cannot statically determine the concrete implementation and therefore cannot perform contract verification or exhaustive control-flow analysis across the dispatch boundary. See the Safety Guarantees section for details.
+**Restrictions in strict mode**: In strict mode, constructing or calling through a `dyn Trait` object is only allowed inside `@trusted` functions, because the compiler cannot statically determine the concrete implementation and therefore cannot perform contract verification or exhaustive control‑flow analysis across the dispatch boundary. See the Safety Guarantees section for details.
 
 ### Built‑in Traits
 The following traits are defined by the language and automatically implemented for applicable types:
@@ -679,7 +737,7 @@ def timer_handler() -> ! {
 }
 ```
 - Interrupt handler functions must have the return type `!` (never return).
-- The compiler enforces that interrupt handlers satisfy the constraints of `@no_alloc` and `@no_panic`; violations are compile-time errors. Redundant explicit `@no_alloc` or `@no_panic` annotations are allowed and produce no warning.
+- The compiler enforces that interrupt handlers satisfy the constraints of `@no_alloc` and `@no_panic`; violations are compile‑time errors. Redundant explicit `@no_alloc` or `@no_panic` annotations are allowed and produce no warning.
 - Interrupt handlers cannot have custom parameters.
 - The compiler automatically generates the interrupt vector table from all `@interrupt` annotations, respecting platform ABI and optional `@layout` attributes.
 
@@ -840,15 +898,15 @@ They are invoked by placing **`@apply_lemma(pow2_induction_hint)`** on the targe
 
 ### `generate` Blocks (Planned)
 
-`generate` blocks provide a declarative, auditable mechanism for compile-time code generation. Unlike `comptime` blocks, which are general-purpose computation engines that cannot directly inject top-level declarations, `generate` blocks are the **only** mechanism for producing module-level declarations (`impl`, `def`, `type`, `const`) in a controlled and reviewable way.
+`generate` blocks provide a declarative, auditable mechanism for compile‑time code generation. Unlike `comptime` blocks, which are general‑purpose computation engines that cannot directly inject top‑level declarations, `generate` blocks are the **only** mechanism for producing module‑level declarations (`impl`, `def`, `type`, `const`) in a controlled and reviewable way.
 
-This feature is planned for v0.2 and has been prioritized in response to community feedback. The `comptime` system deliberately excludes declaration-level generation to maintain a clean separation: `comptime` handles value-level computation, while `generate` handles trait derivation and declaration synthesis.
+This feature is planned for v0.2 and has been prioritized in response to community feedback. The `comptime` system deliberately excludes declaration‑level generation to maintain a clean separation: `comptime` handles value‑level computation, while `generate` handles trait derivation and declaration synthesis.
 
 - **Attachment**: A `generate` block must be explicitly attached to a type definition or module using `generate for <TypeOrModule>`.
-- **Declarative generation**: It may contain any module-level declaration, such as `impl` blocks, function definitions, type aliases, or compile-time constants. These declarations are expanded and injected into the enclosing scope at compile time.
-- **Declarative name mapping (no implicit identifier splicing)**: Posita rejects traditional implicit identifier concatenation (e.g., `concat_idents!` or `#`-based splicing) because it undermines static auditability, breaks determinism, and obscures the connection between generated code and its source. Instead, `generate` blocks will adopt a **declarative name mapping** approach. Within a `generate` block, reusable templates can be defined with placeholder slots (e.g., `[field]`). During expansion, the compiler instantiates each template for the appropriate compile-time entities (such as struct fields), mapping the placeholder to a concrete name derived directly from the source. This ensures every generated identifier has a clear, searchable origin in the source template.
-- **Declarative iteration**: `generate` blocks support iterating over compile-time known sequences, such as the fields of a struct obtained via `@typeInfo!(T).fields`. These loops are fully unrolled at compile time and must be side-effect free. They enable per-field code generation without sacrificing auditability.
-- **Pure and deterministic**: `generate` blocks are **side-effect free**. They may use conditionals (`if`) and field-wise iteration based on compile-time constants (e.g., `@typeInfo`), but they cannot call functions with `@io` effects or rely on non-deterministic input. The transformation from type information to generated declarations must be entirely deterministic.
+- **Declarative generation**: It may contain any module‑level declaration, such as `impl` blocks, function definitions, type aliases, or compile‑time constants. These declarations are expanded and injected into the enclosing scope at compile time.
+- **Declarative name mapping (no implicit identifier splicing)**: Posita rejects traditional implicit identifier concatenation (e.g., `concat_idents!` or `#`‑based splicing) because it undermines static auditability, breaks determinism, and obscures the connection between generated code and its source. Instead, `generate` blocks will adopt a **declarative name mapping** approach. Within a `generate` block, reusable templates can be defined with placeholder slots (e.g., `[field]`). During expansion, the compiler instantiates each template for the appropriate compile‑time entities (such as struct fields), mapping the placeholder to a concrete name derived directly from the source. This ensures every generated identifier has a clear, searchable origin in the source template.
+- **Declarative iteration**: `generate` blocks support iterating over compile‑time known sequences, such as the fields of a struct obtained via `@typeInfo!(T).fields`. These loops are fully unrolled at compile time and must be side‑effect free. They enable per‑field code generation without sacrificing auditability.
+- **Pure and deterministic**: `generate` blocks are **side‑effect free**. They may use conditionals (`if`) and field‑wise iteration based on compile‑time constants (e.g., `@typeInfo`), but they cannot call functions with `@io` effects or rely on non‑deterministic input. The transformation from type information to generated declarations must be entirely deterministic.
 - **Auditability**: All code generated for a type is visible directly below its definition. Reviewers can understand the full interface of a type without searching the entire codebase for scattered `comptime` blocks that might inject implementations.
 - **Error diagnostics**: Errors inside a `generate` block point to the original source location within the block, preserving the correspondence between the generator and the generated code. Contextual information (e.g., "in expansion of `impl Serialize for MyStruct`") is provided for semantic errors.
 
@@ -864,7 +922,7 @@ generate for MyStruct {
         impl Copy for MyStruct { }
     }
 
-    // Generate a getter for each field via a name-mapped template
+    // Generate a getter for each field via a name‑mapped template
     def [field] get(self: &MyStruct) -> field.type {
         return self.[field];
     }
@@ -976,7 +1034,7 @@ Posita provides three complementary mechanisms for resource cleanup, each with d
 | Mechanism | Failure handling | Execution timing | Typical use case |
 |---|---|---|---|
 | RAII (`Drop` trait) | Infallible | Automatic at scope exit (declaration order reversed) | File handles, locks, memory |
-| `finally` block | Infallible | At scope exit on all paths, after `scope_cleanup` actions | Simple, always-run cleanup |
+| `finally` block | Infallible | At scope exit on all paths, after `scope_cleanup` actions | Simple, always‑run cleanup |
 | `scope_cleanup` | Fallible (opt‑in via `propagates`) | Deferred to scope exit (LIFO), with explicit early trigger via `trigger @name` | Multi‑exit fallible cleanup, non‑ownership actions |
 
 #### RAII (Resource Acquisition Is Initialization)
@@ -1013,9 +1071,10 @@ scope_cleanup @name propagates {
 }
 ```
 
-- The block captures variables from the enclosing scope immutably or via `&mut` (subject to borrow rules). It is not a first-class closure; it cannot escape the scope.
+- The block captures variables from the enclosing scope immutably or via `&mut` (subject to borrow rules). It is not a first‑class closure; it cannot escape the scope.
 - Multiple `scope_cleanup` blocks in the same scope execute in **LIFO** (last‑in, first‑out) order when the scope is exited.
 - An explicit `trigger @name;` statement executes the cleanup block immediately and removes it from the deferred list. It will not execute again at scope exit. `trigger` is a statement, not an expression.
+- **Early exits (`return`, `leave with`, `break`, `continue` to outer labels) are compile‑time errors inside a `scope_cleanup` block.** This ensures the block is non‑escaping and preserves the LIFO execution guarantee.
 
 **Error handling:**
 
@@ -1098,17 +1157,17 @@ Rounding suffixes for float‑to‑int conversion: `round`, `trunc` (default), `
 
 | Precedence | Operators | Associativity |
 |------------|-----------|---------------|
-| 1 (highest) | `*`, `/`, `%` | left-to-right |
-| 2 | `+`, `-` | left-to-right |
-| 3 | `<<`, `>>` | left-to-right |
-| 4 | `&` | left-to-right |
-| 5 | `^` | left-to-right |
-| 6 | `\|` | left-to-right |
-| 7 | `==`, `!=`, `<`, `>`, `<=`, `>=` | left-to-right |
-| 8 | `and` | left-to-right |
-| 9 | `or` | left-to-right |
-| 10 | `not` | right-to-left (prefix) |
-| 11 (lowest) | `..`, `..=` | left-to-right |
+| 1 (highest) | `*`, `/`, `%` | left‑to‑right |
+| 2 | `+`, `-` | left‑to‑right |
+| 3 | `<<`, `>>` | left‑to‑right |
+| 4 | `&` | left‑to‑right |
+| 5 | `^` | left‑to‑right |
+| 6 | `\|` | left‑to‑right |
+| 7 | `==`, `!=`, `<`, `>`, `<=`, `>=` | left‑to‑right |
+| 8 | `and` | left‑to‑right |
+| 9 | `or` | left‑to‑right |
+| 10 | `not` | right‑to‑left (prefix) |
+| 11 (lowest) | `..`, `..=` | left‑to‑right |
 
 **`as!` layout compatibility**: The compiler verifies that the source and target types have the same size and alignment via `layout_of!`, or, in the case of truncation, that the truncated value does not violate the target type's `invariant`. All uses of `as!` are flagged by `capsa audit` for mandatory human review.
 
@@ -1128,7 +1187,7 @@ After a move, the source variable is invalidated and any subsequent use is a com
 2.  **`?`** — the propagation operator, providing concise, zero‑cost forwarding of errors with full type visibility.
 3.  **`catch` / `leave with`** — structured control flow for local error handling, conversion, and exit.
 
-The compiler accepts the error value directly (`leave with ErrorVariant`). The `Err(...)` wrapping is a semantic operation performed during type checking—the error value is type-checked against the function's error type `E` and recorded as an `ErrorExit` in the control-flow graph. This is not a syntactic rewrite into `return Err(...)`; `leave with` retains its distinct identity throughout compilation for audit, contract verification, and control-flow analysis.
+The compiler accepts the error value directly (`leave with ErrorVariant`). The `Err(...)` wrapping is a semantic operation performed during type checking—the error value is type‑checked against the function's error type `E` and recorded as an `ErrorExit` in the control‑flow graph. This is not a syntactic rewrite into `return Err(...)`; `leave with` retains its distinct identity throughout compilation for audit, contract verification, and control‑flow analysis.
 
 ### The `Result` Type
 `Result<T, E>` is a built‑in enum:
@@ -1229,17 +1288,17 @@ let data = fetch() catch {
 In strict mode, the warning becomes an error.  
 **Interaction with `?`**: Propagating an error via `?` does **not** count as handling for the purposes of `@must_handle`. The caller must explicitly match the variant or, on the enclosing function, declare `@delegates_must_handle(NetworkError, ParseError)` to pass the responsibility upstream.
 
-### Static Error Tracking: May-Be and Must-Be Analysis
+### Static Error Tracking: May‑Be and Must‑Be Analysis
 
 Posita employs two complementary static analyses to enforce accountability for every error path.
 
-**May-Be Analysis (over‑approximation)**: Determines which error variants *may* reach a given program point. This is used to check that every function signature accurately declares all errors it can propagate. If a `catch` block does not intercept a particular variant, may-be analysis ensures that variant appears in the enclosing function's return type. Failure to include it is a compile-time error.
+**May‑Be Analysis (over‑approximation)**: Determines which error variants *may* reach a given program point. This is used to check that every function signature accurately declares all errors it can propagate. If a `catch` block does not intercept a particular variant, may‑be analysis ensures that variant appears in the enclosing function's return type. Failure to include it is a compile‑time error.
 
-**Must-Be Analysis (under‑approximation)**: Determines which error variants *must* occur at a specific call site—i.e., when all possible execution paths lead to that error and no successful return is possible. Must-be analysis is more precise and is employed in strict mode together with `@must_handle`. If the compiler can prove that a particular error variant is unavoidable at a call site, and that variant is marked `@must_handle`, the caller is forced to handle it locally rather than propagate it further. This prevents the indefinite deferral of critical error handling.
+**Must‑Be Analysis (under‑approximation)**: Determines which error variants *must* occur at a specific call site—i.e., when all possible execution paths lead to that error and no successful return is possible. Must‑be analysis is more precise and is employed in strict mode together with `@must_handle`. If the compiler can prove that a particular error variant is unavoidable at a call site, and that variant is marked `@must_handle`, the caller is forced to handle it locally rather than propagate it further. This prevents the indefinite deferral of critical error handling.
 
 Together, these analyses implement a chain of responsibility:
-- May-be ensures errors are never silently dropped from the type signature.
-- Must-be, when combined with `@must_handle`, forces certain errors to be resolved near their origin, upholding the principle that truly critical failures must not be endlessly propagated.
+- May‑be ensures errors are never silently dropped from the type signature.
+- Must‑be, when combined with `@must_handle`, forces certain errors to be resolved near their origin, upholding the principle that truly critical failures must not be endlessly propagated.
 
 ---
 
@@ -1505,7 +1564,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, and more.
 
 ---
 
@@ -1578,7 +1637,10 @@ A: Documentation comments with `@spec`, `@requirement`, `@rationale`, and `@trac
 A: No. All compile‑time code generation is performed by `comptime` functions, which are type‑checked and sandboxed. This ensures that all code is visible, auditable, and subject to the same safety guarantees.
 
 **Q: How are layout attributes used?**
-A: `@packed` removes padding, `@endian` controls byte order, `@bit_order` controls bit field order, `@align` overrides alignment, and `@pad` inserts explicit padding. These are essential for hardware‑facing code.
+A: `@packed` removes padding, `@endian` controls byte order, `@bit_order` controls bit field order, `@align` overrides alignment, `@pad` inserts explicit padding, `@layout(C)` forces C ABI compatibility, and `@transparent` guarantees newtype layout identity. Additionally, the `layout` keyword defines named aliases for combinations of these attributes, enabling reuse without hiding detail.
+
+**Q: How do layout aliases work?**
+A: A `layout` definition, e.g., `layout Mmio { packed, little_endian; }`, creates a named combination of built‑in layout attributes. It can be applied via `@layout(Mmio)` on a type. The compiler expands the alias at the use site, preserving full auditability. Layout aliases may only contain built‑in attributes; they cannot contain executable logic or reference other aliases.
 
 **Q: Is `@trusted` marked at the call site?**
 A: No. `@trusted` is a declaration‑site attribute on function definitions. Call sites remain clean; the trust boundary is established once, at the function definition, and tracked by `capsa audit`.
@@ -1683,13 +1745,13 @@ A: `leave with` is the only valid error exit in Posita. It provides a dedicated 
 A: The old syntax appeared at the contract level and read like a single postcondition, creating ambiguity about whether it was a clause or a global modifier. The new `@ieee_contracts` attribute is a function‑level annotation that unambiguously switches all `requires` and `ensures` on that function to IEEE 754 semantics. It also cleanly separates semantics control from contract content, and the attribute form makes it visually consistent with other function modifiers like `@pure` and `@no_panic`. It does not affect the contract semantics of callees, keeping the scope clear.
 
 **Q: What is the relationship between `@no_alloc` and `@no_alloc_error`?**
-A: `@no_alloc` implies `@no_alloc_error`; a function that never allocates trivially satisfies the no-allocation-on-error constraint. Redundant declaration of both is allowed but not required.
+A: `@no_alloc` implies `@no_alloc_error`; a function that never allocates trivially satisfies the no‑allocation‑on‑error constraint. Redundant declaration of both is allowed but not required.
 
 **Q: Can `@no_alloc_error` and `@alloc` be used together?**
 A: Yes. This combination means normal execution paths may perform dynamic allocation, but error paths (including all `From` conversions reachable via `?`) must not allocate.
 
 **Q: What happens when `@no_panic` verification fails?**
-A: In strict mode, it is a compile-time error. In non-strict mode, the compiler emits a warning and may instrument unproven checks with a runtime panic guard.
+A: In strict mode, it is a compile‑time error. In non‑strict mode, the compiler emits a warning and may instrument unproven checks with a runtime panic guard.
 
 **Q: Are `@link_proof` and `@comptime_test` required for all `@trusted` functions?**
 A: In strict mode, every `@trusted` function must have either `@link_proof` (referencing an external formal proof) or at least one `@comptime_test` exercising its safety contract. If neither is present, compilation fails.
@@ -1704,10 +1766,10 @@ A: No. The compiler enforces that interrupt handlers satisfy these constraints; 
 A: `@diverges` marks a function that never returns normally, even though its return type is a concrete `T` (not `!`). This is useful for stub implementations that must match a trait signature, eternal watchdogs, or hardware halt routines. The compiler verifies that all paths in the function body diverge deterministically (e.g., `loop {}`). `@diverges` must not be combined with `panic` (use `@no_panic` for non‑panic divergence). It is incompatible with `@runtime_check`.
 
 **Q: Is `leave with` just syntax sugar for `return Err(...)`?**
-A: No. `leave with` is a distinct semantic construct that retains its identity throughout the compilation pipeline. Unlike operator desugaring (where `a + b` is rewritten into `Add::add(&a, &b)` in HIR), `leave with` remains as an `ErrorExit` terminator in the control-flow graph. This distinction enables precise auditing (all error exit points are enumerable without pattern-matching against `return`), contract verification (`ensures on Err` binds directly to `ErrorExit` nodes), and WCET analysis (error paths and success paths are analyzed separately).
+A: No. `leave with` is a distinct semantic construct that retains its identity throughout the compilation pipeline. Unlike operator desugaring (where `a + b` is rewritten into `Add::add(&a, &b)` in HIR), `leave with` remains as an `ErrorExit` terminator in the control‑flow graph. This distinction enables precise auditing (all error exit points are enumerable without pattern‑matching against `return`), contract verification (`ensures on Err` binds directly to `ErrorExit` nodes), and WCET analysis (error paths and success paths are analyzed separately).
 
 **Q: How does `scope_cleanup` differ from `defer` in other languages?**
-A: Unlike anonymous `defer`, Posita's `scope_cleanup` is a named, non‑escaping deferred block. It supports explicit early triggering via `trigger @name`, and its default error-handling mode forbids `?` to prevent silent error injection. The `propagates` modifier must be explicitly used to allow error propagation, and `overrides` can be used to let cleanup errors take precedence over original errors. This design provides both flexibility for fallible cleanup and strong auditability through single-point declaration.
+A: Unlike anonymous `defer`, Posita's `scope_cleanup` is a named, non‑escaping deferred block. It supports explicit early triggering via `trigger @name`, and its default error‑handling mode forbids `?` to prevent silent error injection. The `propagates` modifier must be explicitly used to allow error propagation, and `overrides` can be used to let cleanup errors take precedence over original errors. Early exits (`return`, `leave with`, etc.) are forbidden inside the block to preserve the LIFO execution guarantee. This design provides both flexibility for fallible cleanup and strong auditability through single‑point declaration.
 
 **Q: How can I conditionally skip a `scope_cleanup` block (e.g., "only on failure")?**
 A: Use a ghost variable to track whether the cleanup is needed. Declare a `ghost set mut` flag before the `scope_cleanup`, check it inside the block, and update the flag after successful operations. Since ghost variables are erased at runtime, this has zero overhead. See the "Structured Resource Cleanup" section for an example.
