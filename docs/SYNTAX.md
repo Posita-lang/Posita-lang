@@ -1,5 +1,5 @@
 # Posita Language Syntax
-**Document revision: 2026-07-10** (working draft, not a frozen specification)
+**Document revision: 2026-07-12** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -21,7 +21,7 @@ Posita is a **ultra‑static, systems programming language** where the programme
 `def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`,
 `comptime`, `import`, `as`, `true`, `false`, `auto`, `and`, `or`, `not`, `sizeof`, `alignof`,
 `catch`, `panic`, `unsafe`, `let`, `finally`,
-`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `overrides`, `layout`
+`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`
 
 `Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words.  
 `linear`, `consume` are planned keywords; `by` is reserved for future use.
@@ -1178,6 +1178,64 @@ The `move` keyword explicitly transfers ownership of a non‑`Copy` value. It ma
 - Closure captures: `let closure = |...| capture value by move { ... };`
 After a move, the source variable is invalidated and any subsequent use is a compile‑time error. The compiler will not insert a `drop` call for the moved‑from variable.
 
+### First-Class Polymorphism (`poly` / `unbox`)
+
+Posita supports first‑class polymorphic values through the `poly` and `unbox` keywords. This allows generic functions (whose types carry `Forall` quantifiers) to be boxed into first‑class values, passed around, stored in data structures, and instantiated at different types at different use sites — without losing the ability to be re‑instantiated.
+
+- **`poly(expr)`** — Boxes a polymorphic expression into a first‑class polytype value. The expression must have a `Forall` type (i.e., a generic function, or a value whose type is universally quantified). The result type is `Poly { quantifiers, body }`, a first‑class type that can be stored, passed, and returned.
+
+- **`unbox(expr)`** — Unboxes a `Poly`-typed value by instantiating each of its quantifiers with a fresh type variable. The result is a monotype (or still‑polymorphic, depending on the body) that can be applied or used further. Calling `unbox` on the same `poly` value multiple times produces fresh instantiations each time.
+
+**Example — boxing and unboxing the identity function:**
+
+```posita
+def id<T>(x: T) -> T { return x; }
+
+def main() -> Int<32> {
+    set p = poly(id);         // box id into a first-class polytype
+    set f = unbox(p);         // instantiate — f: ?T → ?T (fresh type variables)
+    return f(42);             // f is applied to Int<32>, yields Int<32>
+}
+```
+
+**Multiple instantiations from the same polytype:**
+
+```posita
+def main() -> Int<32> {
+    set p = poly(id);
+    set f = unbox(p);         // first instantiation
+    set x = f(42);            // instantiated for Int<32>
+    set y = f(true);          // instantiated for Bool — same poly, different types
+    return x;
+}
+```
+
+**Multiple quantifiers:**
+
+```posita
+def pair<T, U>(a: T, b: U) -> T { return a; }
+
+def main() -> Int<32> {
+    set f = unbox(poly(pair));  // f: ?T × ?U → ?T (two fresh vars)
+    return f(42, true);         // f(42, true): Int<32>
+}
+```
+
+**Inline boxing and unboxing:**
+
+```posita
+def main() -> Int<32> {
+    set f = unbox(poly(id));    // combined: box then immediately unbox
+    return f(42);
+}
+```
+
+**Error cases:**
+- `poly(42)` is rejected at compile time: `poly(...)` requires a polymorphic expression, but `42` is a concrete `Int<32>`.
+- `unbox(x)` where `x : Int<32>` is rejected: `unbox(...)` requires a polytype value; the compiler will report an error when the concrete non‑poly type is resolved.
+
+**Design note:** `poly`/`unbox` follow the same design as higher‑rank polymorphism in ML dialects (e.g., the `[∀α.τ]` boxed type in OmniML §3.1). The `Poly` type is covariant in its body and participates in unification with α‑conversion of quantifier indices. This enables type‑safe passing of polymorphic functions without requiring a separate `dyn`‑style vtable dispatch mechanism.
+
 ---
 
 ## Error Handling
@@ -1564,7 +1622,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), and more.
 
 ---
 
@@ -1779,3 +1837,6 @@ A: Use an enum set alias with the `|` operator in a `type` declaration. For exam
 
 **Q: What is `@auto_deref` and when should I use it?**
 A: `@auto_deref` is an attribute placed on a `Deref` implementation that allows method‑call receivers to auto‑dereference through that implementation. Without it, wrapper types require explicit `(*x).method()` syntax. Use `@auto_deref` when your type is designed to be a transparent wrapper (e.g., `Rc<T>`, `Box<T>`). Omit it when the dereference should be explicit (e.g., opaque pointers, newtypes with semantic boundaries). Built‑in references (`&T` / `&mut T`) always auto‑dereference without requiring the attribute.
+
+**Q: How do I use `poly` and `unbox` for first‑class polymorphism?**
+A: `poly(expr)` boxes a polymorphic expression (like a generic function) into a `Poly` value. `unbox(poly_value)` instantiates that polytype with fresh type variables, yielding a monomorphic function that can be applied. This allows passing generic functions as values and instantiating them at multiple types. See the "First‑Class Polymorphism" section for examples.
