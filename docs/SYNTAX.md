@@ -1584,7 +1584,7 @@ def make_employee_report(emp: &Employee) -> &[Byte] {
         match info {
             TypeInfo::Int { bits, .. } => { if bits > 32 { @compile_error!("Bonus type too large"); } }
             _ => {}
-        }
+        };
     }
     return b"Report generated";
 }
@@ -1613,6 +1613,7 @@ def main() -> Result<(), AppError> {
     set token2 = move token1;
     return Ok(());
 }
+
 ```
 
 ---
