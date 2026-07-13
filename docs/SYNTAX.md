@@ -1,5 +1,5 @@
 # Posita Language Syntax
-**Document revision: 2026-07-12** (working draft, not a frozen specification)
+**Document revision: 2026-07-13** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -878,7 +878,7 @@ Public reflection (`@typeInfo!`) only exposes `pub` items. Internal reflection (
 The following utilities are available in `comptime` contexts:
 
 - **`assert(condition)`**: Evaluates `condition` at compile time. If the condition is `false`, compilation halts with an error message. `assert` is stripped from the final binary and cannot be used for runtime checks.
-- **`@compile_error("msg")`**: Unconditionally halts compilation with the given message. Typically used in `comptime` to reject invalid code generation or type combinations.
+- **`@compile_error("msg")`** and **`@compile_error!("msg")`**: Both forms are legal. The built‑in `compile_error` is descriptive enough to be recognized as a compile‑time operation, so the `!` marker is optional. Using `!` explicitly remains consistent with other `comptime` call sites and may be preferred for clarity. Both unconditionally halt compilation with the given message. Typically employed in `comptime` to reject invalid code generation or type combinations.
 
 ### Optimization Hooks (advanced)
 ```posita
@@ -1449,6 +1449,12 @@ def serialize<T, S>(value: &T, stream: &mut S) -> Result<(), Error>
     where T: Serialize, S: Write, T::Format: Display
 { ... }
 ```
+
+The `where` clause also supports tuple syntax to apply a multi‑type constraint to a tuple of type parameters:
+```posita
+where (T, U): MyConstraint<T, U>
+```
+This form is equivalent to `where T: MyConstraint<...>, U: MyConstraint<...>` for constraints defined with multiple type parameters. It provides a compact notation when a constraint relationship involves several type parameters simultaneously.
 
 ### Reusable Constraint Blocks (`constraint`)
 ```posita
