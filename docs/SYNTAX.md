@@ -21,7 +21,7 @@ Posita is a **ultra‑static, systems programming language** where the programme
 `def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`,
 `comptime`, `import`, `as`, `true`, `false`, `auto`, `and`, `or`, `not`, `sizeof`, `alignof`,
 `catch`, `panic`, `unsafe`, `let`, `finally`,
-`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`
+`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`
 
 `Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words.  
 `linear`, `consume` are planned keywords; `by` is reserved for future use.
@@ -242,6 +242,8 @@ type OwnedFd = Int<32>
 ```
 Declaring `set fd: OwnedFd;` will then be a compile‑time error. The `with no_default` clause is the only way to forbid implicit initialization; there is no `@no_default` attribute.
 
+> **GADT enums:** If an enum definition contains any variant with a `when` constraint (see GADTs), the `with default` clause is currently prohibited. This is because a single default value cannot be valid for all possible instantiations of the enum’s type parameters. This restriction may be relaxed in the future.
+
 ### Construction Validation
 A type may specify a validation function that is automatically called after every explicit construction.
 ```posita
@@ -321,6 +323,133 @@ def read_and_parse() -> Result<Data, IoOrParseError> {
 - **Variant uniqueness**: All variant names across the combined enums must be distinct. If two enums share a variant name (e.g., both define `Timeout`), the compiler reports an error. Disambiguation requires qualifying the variant name with its enum type (e.g., `IoError::Timeout` vs `NetError::Timeout`), but this is only permitted in `catch` and `match` patterns, not in type declarations.
 - **Transparency**: The alias is fully transparent to the type system. The compiler expands `IoOrParseError` to the full set of variants at compile time. `catch` branches, `@must_handle` annotations, and `match` expressions can reference individual variants by their original names without qualifying through the alias.
 - **Recursive sets**: An enum set alias may include other set aliases in its definition (e.g., `type AppError = IoOrParseError | DbError`). The compiler flattens the chain into a single variant set.
+
+#### Generalized Algebraic Data Types (GADTs)
+
+Posita supports Generalized Algebraic Data Types (GADTs) to enable type‑safe embedding of domain‑specific languages and precise encoding of invariants directly into enum variants. A GADT is an enum where individual variants may impose additional constraints on the type parameters of the enum, allowing the compiler to refine types during pattern matching.
+
+##### Motivation
+
+Consider an expression language where the type of an expression is statically known. Without GADTs, a typical encoding requires a runtime type tag and fallible evaluation. With GADTs, the type parameter `T` in `Expr<T>` precisely tracks the expression’s result type, making ill‑typed expressions unrepresentable.
+
+```posita
+type Expr<T> = enum {
+    Lit(Int<32>) when T == Int<32>,
+    IsZero(Expr<Int<32>>) when T == Bool,
+    If(Expr<Bool>, Expr<T>, Expr<T>),
+}
+```
+
+Here, `Lit` is only a valid variant of `Expr<Int<32>>`, `IsZero` only of `Expr<Bool>`, while `If` works for any `T`. Attempting to construct `Lit(42)` where an `Expr<Bool>` is expected is a compile‑time error.
+
+##### Syntax
+
+A GADT variant is declared like a regular enum variant, optionally followed by the keyword `when` and a compile‑time boolean expression. The expression may reference the enum’s type parameters and may use equality constraints (`==`) with concrete types.
+
+```
+enum_variant ::= variant_name ( types? ) [ when constraint_expr ]
+constraint_expr ::= boolean_expression   // must be evaluable at compile time
+```
+
+Currently, only equality constraints of the form `T == ConcreteType` are supported, where `T` is a type parameter of the enum and `ConcreteType` is a fully known type. Multiple constraints can be combined with `and`:
+
+```posita
+type KeyValue<K, V> = enum {
+    IntKey(Int<32>, String) when K == Int<32> and V == String,
+    StrKey(String, Int<32>) when K == String and V == Int<32>,
+}
+```
+
+The `when` clause is part of the variant’s “header” and must appear after the fields and before any trailing comma or closing brace of the enum body. It applies only to the variant it is attached to; multiple variants may carry independent constraints.
+
+##### Semantics
+
+- A variant with a `when` clause is only considered a valid constructor for instances of the enum where the type arguments satisfy the constraint. For example, `Expr::Lit` can only produce values of type `Expr<Int<32>>`.
+- The compiler verifies at every construction site that the inferred or explicitly given type arguments satisfy the variant’s constraints. Violation results in a compile‑time error.
+- Constraints are resolved purely at compile time and do not produce runtime checks. They are completely erased from the generated code.
+
+##### Pattern Matching and Type Refinement
+
+When a GADT value is examined via `match`, `if let`, or `while let`, the compiler uses the variant’s `when` constraints to refine the types in the corresponding branch. This enables writing type‑safe operations without redundant casts.
+
+```posita
+def eval<T>(e: Expr<T>) -> T {
+    match e {
+        Lit(n) => n,                         // T refined to Int<32>, n: Int<32>
+        IsZero(inner) => eval!(inner) == 0, // T refined to Bool, inner: Expr<Int<32>>
+        If(cond, then_expr, else_expr) => {
+            if eval!(cond) { eval!(then_expr) } else { eval!(else_expr) }
+        },
+    }
+}
+```
+
+In the `Lit` branch, the compiler learns `T == Int<32>` and therefore the return type `T` can be satisfied by returning an `Int<32>`. Similarly, in the `IsZero` branch, `T == Bool` is known, and the recursive call `eval!(inner)` returns `Int<32>`, allowing the comparison `== 0`. The `If` branch imposes no additional constraints, so `T` remains abstract.
+
+The refinement applies to the entire branch body, including any variable bindings from patterns. For instance, in `Lit(n)`, the variable `n` has type `Int<32>`, as declared, and the type parameter `T` of the whole `match` expression is locally unified with `Int<32>`. This unification is consistent with the fact that `e` in that branch must be of type `Expr<Int<32>>`.
+
+Refinement is also available in `if let` and `while let` expressions. For GADT enums, the compiler infers the same type equalities within the guarded block.
+
+##### Exhaustiveness Checking
+
+GADT constraints interact with exhaustiveness checking. If a particular variant is impossible for a given instantiation of the enum’s type parameters, the compiler may omit it from exhaustiveness requirements.
+
+Consider `Expr<Bool>`. The `Lit` variant requires `T == Int<32>`, which contradicts `T == Bool`; therefore, `Lit` is unreachable for `Expr<Bool>`. When matching on an `Expr<Bool>`, the compiler does not require a branch for `Lit`. Similarly, for `Expr<Int<32>>`, the `IsZero` variant is unreachable.
+
+This dead‑variant elimination works automatically. When the `@exhaustive` attribute is applied to a GADT enum, the compiler enforces that all **reachable** variants are covered, and no warning is emitted for omitting unreachable ones. This eliminates the need for error‑prone wildcard `_` branches that might mask forgotten cases.
+
+##### Interaction with `with default`
+
+A type‑level default value declared with `with default` must be valid for all possible instances of the type. For a GADT enum with type parameters, a default value would need to exist for every legal instantiation of the type parameters. Because variants are constrained by `when` clauses, it is generally impossible to provide a single default expression that is well‑typed under all possible constraints.
+
+Therefore, **currently, if an enum definition contains any variant with a `when` clause, the `with default` clause is prohibited.** This restriction may be relaxed in the future for enums where all variants’ constraints are equivalent (e.g., all constrain `T` to the same concrete type), or through specialized default annotations per instantiation. For now, the compiler emits an error if `with default` is used on a GADT enum.
+
+```posita
+// Error: GADT enum cannot have a default value
+type Expr<T> = enum {
+    Lit(Int<32>) when T == Int<32>,
+    ...
+} with default = Lit(0);  // compile-time error
+```
+
+For enums without type parameters but with `when` constraints that involve only global constants (not type parameters), `with default` remains allowed because no generic instantiation is affected. (This scenario is rare and equivalent to a plain enum.)
+
+##### Construction and Validation
+
+Constructors of GADT variants are subject to the same type‑checking and contract verification as any other constructor. If a variant has an invariant or a `validate` function, those apply after the `when` constraints have been satisfied.
+
+##### Limitations and Future Directions
+
+- Only type equality constraints (`T == ConcreteType`) are supported in the initial implementation. Constraints such as `T: SomeTrait` or `T != U` are not yet allowed.
+- The constraint expressions are evaluated at compile time and cannot depend on runtime values.
+- GADT constraints do not interact with the SMT solver used for contract verification; they are entirely a type‑system feature.
+- Default values for GADT enums are currently prohibited; a future version may allow default values for specific monomorphic instances using a syntax like `default for Expr<Bool> = ...` (planned).
+
+##### Examples
+
+A type‑safe abstract syntax tree for a simple language:
+
+```posita
+type Expr<T> = enum {
+    Lit(Int<32>) when T == Int<32>,
+    Neg(Expr<Int<32>>) when T == Int<32>,
+    Add(Expr<Int<32>>, Expr<Int<32>>) when T == Int<32>,
+    Eq(Expr<Int<32>>, Expr<Int<32>>) when T == Bool,
+    If(Expr<Bool>, Expr<T>, Expr<T>),
+}
+
+def eval<T>(e: Expr<T>) -> T {
+    match e {
+        Lit(n) => n,
+        Neg(x) => -eval!(x),
+        Add(a, b) => eval!(a) + eval!(b),
+        Eq(a, b) => eval!(a) == eval!(b),
+        If(c, t, f) => if eval!(c) { eval!(t) } else { eval!(f) },
+    }
+}
+```
+
+This demonstrates how GADTs eliminate the possibility of constructing ill‑typed ASTs and enable safe evaluation without runtime type checks.
 
 ### Layout Control Attributes
 Fine‑grained control for hardware registers and protocols:
@@ -1027,6 +1156,8 @@ match value {
 - **Or patterns**: `pattern1 | pattern2` matches if either pattern matches. Both patterns must bind the same set of variables with compatible types.
 - **Guards**: The `if guard_condition` clause filters matches. Guard expressions must be `@pure` and free of side effects.
 
+> **GADT Refinement**: When matching on a GADT enum, the compiler automatically refines the enum’s type parameters according to the variant’s `when` clauses. Within each branch, the type equalities implied by the matched variant become available, enabling type‑safe operations without casts. See the GADT section for details.
+
 ### Structured Resource Cleanup
 
 Posita provides three complementary mechanisms for resource cleanup, each with distinct guarantees. The following table summarizes their roles:
@@ -1629,7 +1760,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), GADTs with `when` constraints, and more.
 
 ---
 
@@ -1847,3 +1978,9 @@ A: `@auto_deref` is an attribute placed on a `Deref` implementation that allows 
 
 **Q: How do I use `poly` and `unbox` for first‑class polymorphism?**
 A: `poly(expr)` boxes a polymorphic expression (like a generic function) into a `Poly` value. `unbox(poly_value)` instantiates that polytype with fresh type variables, yielding a monomorphic function that can be applied. This allows passing generic functions as values and instantiating them at multiple types. See the "First‑Class Polymorphism" section for examples.
+
+**Q: Does Posita support GADTs?**
+A: Yes. Posita supports Generalized Algebraic Data Types (GADTs) where enum variants can carry type equality constraints using the `when` keyword. This enables type‑safe embedded DSLs and precise type refinement during pattern matching. See the "Generalized Algebraic Data Types" section for full details.
+
+**Q: How do GADTs interact with `with default`?**
+A: Currently, an enum containing any variant with a `when` constraint cannot have a `with default` clause. This is because a single default value cannot be valid for all possible instantiations. This restriction may be relaxed in the future for monomorphic instances. See the GADTs section for more.
