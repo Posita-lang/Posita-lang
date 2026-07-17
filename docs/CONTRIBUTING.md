@@ -1,7 +1,7 @@
 # Contributing to Posita
 
 Thank you for your interest in contributing to **Posita**!  
-Posita is in its earliest design phase — there is no compiler code yet, but we are actively shaping the language syntax, type system, and safety guarantees. Your input at this stage is incredibly valuable.
+Posita is in its earliest design phase — we are actively developing Posita's compiler, named **Ponent**, which is currently in the front‑end phase (lexing, parsing, HIR construction, etc.), but core analysis modules like type checking, borrow checking, and contract verification are already in progress. Your input at this stage is incredibly valuable.
 
 ## Code of Conduct
 
@@ -70,7 +70,7 @@ We’ll add detailed `COMPILER.md` and setup instructions once the compiler work
 
 ## Licensing
 
-Posita is distributed under the MIT license (or Apache 2.0, to be confirmed).  
+Posita is distributed under the MIT license.  
 By contributing, you agree that your work will be licensed under the same terms.
 
 ---
