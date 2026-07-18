@@ -21,7 +21,7 @@ Posita is a **ultra‑static, systems programming language** where the programme
 `def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`,
 `comptime`, `import`, `as`, `true`, `false`, `auto`, `and`, `or`, `not`, `sizeof`, `alignof`,
 `catch`, `panic`, `unsafe`, `let`, `finally`,
-`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`
+`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`
 
 `Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words.  
 `linear`, `consume` are planned keywords; `by` is reserved for future use.
@@ -100,7 +100,7 @@ Example:
 /// @safety_integrity DO‑178C Level A
 def issue_resolution_advisory(intruder: AircraftState, own: AircraftState) -> Result<RA, Error>
     requires abs(intruder.altitude - own.altitude) <= 1000
-    ensures result.is_ok() implies ra_issued()
+    ensures codomain.is_ok() implies ra_issued()
 {
     // ...
 }
@@ -124,6 +124,35 @@ type LargeStruct = struct { data: [Int<8>; 1024] };
 ```
 
 Manual implementation of `Copy` is allowed for types where bitwise replication is semantically sound, even if large. By doing so, the programmer explicitly accepts the performance characteristics.
+
+### Affine and Linear Types
+
+Posita's ownership model is based on **affine types**: every non‑`Copy` value may be used **at most once**. "Using" a value means either **moving** it to a new owner, **discarding** it (implicitly at scope exit), or **consuming** it via a destructor.
+
+- **Copy types** (see Value Semantics) are exempt: they can be duplicated arbitrarily.
+- **Non‑`Copy` types are affine**. They cannot be duplicated. They can be moved, and if not moved out of a scope they are **implicitly discarded**.
+  - If the type implements `Drop`, the compiler calls the destructor at the discard point.
+  - If the type does **not** implement `Drop`, the compiler simply reclaims the memory with no user code executed.
+- After a move, the source variable is statically dead – further use is a compile‑time error.
+
+Affine types guarantee that a value is never duplicated or accidentally used after a move, and that every value is eventually cleaned up (destructor or plain deallocation). This eliminates double‑free, use‑after‑move, and forgotten‑resource bugs without runtime overhead.
+
+#### Linear types (`@linear`)
+
+Some resources must **never** be silently discarded, even without a destructor. For these, Posita provides the `@linear` attribute on a type definition:
+
+```posita
+@linear
+type SessionToken = struct { id: Int<32> }
+```
+
+A `@linear` type is affine (non‑`Copy`, no `Drop`) with one additional rule: the compiler **forbids implicit discarding**. Every value of a linear type must be **explicitly terminated** before it goes out of scope. Termination is achieved by passing the value to a consuming function (e.g., `token.destroy()`), returning it to the caller, or explicitly discarding it via the standard library function `forget(token)`.
+
+If a linear value could leave a scope without being moved or explicitly forgotten, the compiler emits an error.
+
+Linear types are intended for protocol tokens, hardware descriptors, or any resource where an untracked disappearance would violate safety or audit requirements. All existing ownership and borrowing rules apply unchanged.
+
+> **Note:** `@linear` is a type‑level property, not a parameter qualifier. It only affects implicit discard. If you need to temporarily treat a normal affine value as linear (e.g., require explicit consumption in a critical function), use the `linear` keyword on a function parameter or a local block (planned for a future release).
 
 ### Bit‑width Parameterized Integers
 - Signed: `Int<bits>`, `bits` must be compile‑time constant, 1..64.
@@ -632,9 +661,9 @@ Ghost variables follow the same mutability rules as regular variables. `ghost se
 def get_adult_names(users: &[User]) -> Vector<String>
     requires users'len > 0
     requires exists user in users where user.age >= 18
-    ensures result'len >= 1
+    ensures codomain'len >= 1
 {
-    set mut names = Vector<String>::new();
+    set mut names = Vector<String>::new();//The syntax with turbofish should not appear at all.
     ghost set mut found_adult: bool = false;
 
     for i in 0..users'len
@@ -967,7 +996,7 @@ comptime def eval_polynomial(...) -> Int<64> { ... }
 ```
 Calls to `comptime` functions **must** be marked with `!` to make the compile‑time nature explicit at the call site:
 ```posita
-set result = eval_polynomial!(coeffs, x);
+set val = eval_polynomial!(coeffs, x);
 ```
 This ensures that reviewers can immediately identify where compile‑time evaluation occurs.
 
@@ -976,8 +1005,8 @@ This ensures that reviewers can immediately identify where compile‑time evalua
 ```posita
 @comptime_test
 def test_trusted_function() {
-    let result = some_trusted_function(test_input);
-    assert(result == expected_output);
+    set val = some_trusted_function(test_input);
+    assert(val == expected_output);
 }
 ```
 Test failures cause a compile error. `@comptime_test` functions are stripped from the final binary. Contract‑verification counterexamples can be automatically converted into such tests.
@@ -1504,13 +1533,65 @@ Contracts are evaluated in the mathematical integer domain (ideal precision) by 
 @ieee_contracts
 def sqrt_approx(x: Float<64>) -> Float<64>
     requires x >= 0.0
-    ensures abs(result * result - x) <= 1e-10
+    ensures abs(codomain * codomain - x) <= 1e-10
 { ... }
+```
+
+### Return Value and Path Labels
+
+Within an `ensures` clause, the reserved word `codomain` refers to the value returned by the function. It is implicitly bound and may not be used as an ordinary variable or parameter name anywhere in the program.
+
+To write postconditions that apply only to specific return paths, Posita supports **path labels**. A path label is an identifier prefixed with `@` that is attached to a `return` statement and then referenced in `ensures` clauses.
+
+- **Label on return**:
+  ```posita
+  return @label expression
+  ```
+  Multiple labels (space‑separated):
+  ```posita
+  return @label1 @label2 expression
+  ```
+- **Label in ensures**:
+  ```posita
+  ensures @label property
+  ```
+  Here `@label` acts as a placeholder for the value returned on every path marked with that label. The property is a Boolean expression written in terms of `@label` and any visible parameters or global constants. This asserts that each such return value satisfies the property.
+
+A label is visible only within the function where it is used. A label referenced in `ensures` but not present on any `return` causes a compile‑time error. Labels and `codomain` may be freely combined; `ensures codomain > 0` applies to all return paths regardless of labels.
+
+**Example** (multi‑path constraints):
+```posita
+def categorize(x: Int<32>) -> Int<32>
+    ensures @even % 2 == 0
+    ensures @big > 100
+{
+    if x < 10 {
+        return @even 4;
+    } else if x < 20 {
+        return @even @big 200;
+    } else {
+        return @big 300;
+    }
+}
+```
+
+**Example** (using `codomain` and labels together):
+```posita
+def compute(x: Int<32>) -> Int<32>
+    ensures codomain >= 0
+    ensures @fast < 100
+{
+    if x < 10 {
+        return @fast x * 2;
+    } else {
+        return x * 10;
+    }
+}
 ```
 
 #### Contract Qualifiers
 Postconditions (`ensures`) can be specialized to apply only to specific exit paths using qualifiers:
-- **`ensures on Ok(result) => ...`**: The postcondition holds only when the function returns `Ok`. The name `result` is bound to the success value.
+- **`ensures on Ok(val) => ...`**: The postcondition holds only when the function returns `Ok`. The name `val` is bound to the success value.
 - **`ensures on Err(error) => ...`**: The postcondition holds only when the function returns `Err`. The name `error` is bound to the error value.
 - **`ensures on_timeout => ...`** (async only): Holds when the async operation times out.
 - **`ensures on_cancel => ...`** (async only): Holds when the async operation is cancelled before completion.
@@ -1527,12 +1608,12 @@ def increment(x: &mut Int<32>)
 ```posita
 def divide(a: Int<32>, b: Int<32>) -> Int<32>
     requires b != 0
-    ensures result * b == a
+    ensures codomain * b == a
 { return a / b; }
 
 def factorial(n: Int<32>) -> Int<32>
     requires n >= 0
-    ensures result > 0
+    ensures codomain > 0
     terminates n
 {
     if n == 0 { 1 } else { n * factorial(n - 1) }
@@ -1548,7 +1629,7 @@ In strict mode, `@runtime_check` is treated as an error: all contracts must be s
 Loops may specify an `invariant` and a `decreases` clause. The `decreases` expression must be a non‑negative integer that strictly decreases on each iteration, providing a proof that the loop always terminates.
 ```posita
 def sum(arr: &[Int<32>]) -> Int<32>
-    ensures result == fold(arr, 0, +)
+    ensures codomain == fold(arr, 0, +)
 {
     set mut total = 0;
     for i in 0..arr'len
@@ -1564,6 +1645,10 @@ Invariants and decreases clauses must appear immediately after the loop header, 
 - `fold(arr, init, op)`: represents the left fold of array `arr` starting from `init` using binary operator `op`. It is a pure function used only in contracts and invariants. Its semantics are: `fold(arr, init, op) == op(...op(op(init, arr[0]), arr[1]), ..., arr[arr'len-1])`.
 - `abs(x)`: absolute value of integer `x`.
 - `old(expr)`: captures the value of `expr` at function entry, usable in `ensures` clauses.
+- `A implies B`: logical implication, equivalent to `not A or B`. The
+expression `A implies B` is true if either `A` is false or `B` is true.
+It is available in all contract contexts and is evaluated in the
+mathematical (ideal) domain, without short‑circuit semantics.
 - `forall` and `exists` quantifiers may appear in contracts:
   ```posita
   requires forall i in 0..arr'len: arr[i] > 0
@@ -1656,7 +1741,7 @@ extern "C" def puts(s: &[Byte]) -> Int<32>;
 @trusted
 def safe_puts(msg: &[Byte]) -> Result<(), AppError>
     requires msg'len > 0 && msg[msg'len - 1] == 0
-    ensures result == Ok(())
+    ensures codomain == Ok(())
 {
     unsafe { puts(msg); }
     Ok(())
@@ -1690,16 +1775,16 @@ def sum_list<T>(items: &[T]) -> T where T: AddableDefault {
 def calculate_bonus(salary: Salary, multiplier: Int<32>) -> Salary
     requires salary >= 0
     requires multiplier > 0
-    ensures result >= salary
+    ensures codomain >= salary
 {
-    set mut result = salary;
+    set mut total = salary;
     set mut i: Int<32> = 0;
     while i < multiplier
-        invariant result == salary + i * salary
+        invariant total == salary + i * salary
         invariant i >= 0
         decreases multiplier - i
-    { result = result + salary; i = i + 1; }
-    return result;
+    { total = total + salary; i = i + 1; }
+    return total;
 }
 
 def process_employee(emp: &mut Employee, bonus_mult: PositiveInt) -> Result<(), AppError>
@@ -1760,7 +1845,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), GADTs with `when` constraints, and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), and more.
 
 ---
 
@@ -1794,7 +1879,7 @@ A: File‑based, private by default, no wildcard imports. Dependencies are expli
 A: Contracts (`requires`/`ensures`), type invariants, loop invariants are verified by SMT solver. In strict mode, all contracts must be proven.
 
 **Q: What about linear types and usage counts?**
-A: (Planned) `linear` and `@consume(N)` will allow compile‑time tracking of resource consumption, enabling safe protocols. Currently under design.
+A: `@linear` types forbid implicit discard, requiring explicit consumption via a consuming function or `forget`. The `linear` parameter qualifier (planned) will allow treating normal affine values as linear in specific contexts. `@consume(N)` for resource counting is also planned.
 
 **Q: Can I hand‑write proofs in Posita?**
 A: Posita provides `@lemma` functions to supply auxiliary assertions that assist the SMT solver, and `@comptime_test` blocks to validate `@trusted` code against concrete inputs at compile time. For external formal proofs, `@link_proof` can reference Coq/ATS files that are distributed with the package and verified by `capsa`.
@@ -1908,7 +1993,7 @@ A: `@must_use` warns if the entire return value is ignored. `@must_handle` is mo
 A: `@exhaustive` on an enum definition forces all `match`, `if let`, and `while let` on that enum to be exhaustive. This prevents new variants added during evolution from being silently ignored in existing code.
 
 **Q: How do contracts interact with error paths?**
-A: By default, `ensures` applies to all exit paths. You can specialize with `ensures on Ok(result) => ...` and `ensures on Err(error) => ...` to make guarantees specific to success or failure returns.
+A: By default, `ensures` applies to all exit paths. You can specialize with `ensures on Ok(val) => ...` and `ensures on Err(error) => ...` to make guarantees specific to success or failure returns.
 
 **Q: How does the compiler help me debug contract failures?**
 A: The compiler provides three diagnostic levels (L1: locate, L2: explain with counterexamples, L3: full SMT‑LIB dump). Use `capsa build --diagnostic-level=N` to select the depth of information.
@@ -1984,3 +2069,12 @@ A: Yes. Posita supports Generalized Algebraic Data Types (GADTs) where enum vari
 
 **Q: How do GADTs interact with `with default`?**
 A: Currently, an enum containing any variant with a `when` constraint cannot have a `with default` clause. This is because a single default value cannot be valid for all possible instantiations. This restriction may be relaxed in the future for monomorphic instances. See the GADTs section for more.
+
+**Q: What is `codomain` and how does it differ from the old `result`?**
+A: `codomain` is the reserved keyword used in `ensures` clauses to refer to the function's return value. It replaces the previously undocumented use of `result` in contracts, which could conflict with user variable names. `codomain` cannot be used as a variable name, keeping the contract namespace clean.
+
+**Q: How do I write different postconditions for different return paths without using an enum?**
+A: Use **path labels**. Attach `@label` to a `return` statement (e.g., `return @fast x * 2;`) and write `ensures @fast => ...` in the contract. Multiple labels can be assigned to a single return, and a label can be used on several returns. Labels are scoped to the function and checked for consistency. See the "Return Value and Path Labels" section for examples.
+
+**Q: What are affine and linear types in Posita?**
+A: All non‑`Copy` types are affine: they can be moved or discarded, but not duplicated. `@linear` types are a stricter subset that also forbid implicit discarding—they must be explicitly consumed (e.g., by passing to a consumer function or calling `forget`). This provides fine‑grained control over resources that must never be silently dropped. See the "Affine and Linear Types" section for details.
