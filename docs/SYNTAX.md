@@ -154,6 +154,64 @@ Linear types are intended for protocol tokens, hardware descriptors, or any reso
 
 > **Note:** `@linear` is a type‑level property, not a parameter qualifier. It only affects implicit discard. If you need to temporarily treat a normal affine value as linear (e.g., require explicit consumption in a critical function), use the `linear` keyword on a function parameter or a local block (planned for a future release).
 
+### Const Generics (Compile‑Time Value Parameters)
+
+Types can be parameterized by compile‑time constants, enabling generic definitions
+that depend on integer sizes, array lengths, or other configuration values.
+
+#### Declaration
+
+A `const` generic parameter is introduced with the `const` keyword inside the
+generic parameter list, similar to a type parameter but binding a value:
+
+```posita
+type Vector<T, const N: usize> = struct {
+    data: [T; N],
+    length: usize,
+}
+
+def identity_matrix<const N: usize>() -> Matrix<N, N>
+    requires N > 0
+{ ... }
+
+def resize_array<T, const M: usize, const N: usize>(src: &[T; M]) -> [T; N]
+    where M <= N
+{ ... }
+```
+
+- `const N: Type` declares a compile‑time constant named `N` of type `Type`. The type must be one of `usize`, `Int<B>`, `UInt<B>`, or any type whose values are fully known at compile time.
+- `const` parameters are **implicitly `comptime`**; they never exist at runtime and do not contribute to memory layout beyond their instantiation.
+- At call sites, `const` arguments must be compile‑time constant expressions (literals, `const` items, or `comptime` function results).
+
+#### Usage in Contracts
+
+`const` parameters participate in contracts exactly like any other value:
+
+```posita
+def get_element<T, const N: usize>(arr: &[T; N], idx: usize) -> &T
+    requires idx < N
+    ensures codomain == arr[idx]
+{ &arr[idx] }
+```
+
+The SMT solver treats `const` parameters as symbolic constants, enabling proofs
+over entire families of types (e.g., “for all N, ...”).
+
+#### Interaction with `comptime`
+
+- `comptime` type factories can produce types with `const` parameters by calling
+  functions that return such types.
+- Conversely, `const` generics provide a declarative alternative where the
+  compiler automatically monomorphizes the code for each concrete constant value,
+  enabling static verification without manual `comptime` expansion.
+
+#### Monomorphization
+
+Every distinct combination of `const` argument values results in a separate
+monomorphized instance. The compiler guarantees identical runtime behavior as
+if the code were hand‑written for each constant, with all checks resolved at
+compile time.
+
 ### Bit‑width Parameterized Integers
 - Signed: `Int<bits>`, `bits` must be compile‑time constant, 1..64.
 - Unsigned: `UInt<bits>`.
@@ -1924,7 +1982,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, and more.
 
 ---
 
