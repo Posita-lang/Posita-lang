@@ -150,8 +150,6 @@ The following features are part of the language design but will be implemented i
 - `linear` and `@consume(N)` (graded types)
 - Typestate (`File<Open>` / `File<Closed>`)
 - `const` generics (compile‑time type parameters) — planned as an independent language feature, not syntactic sugar over `comptime` factories. `const` generic parameters are first‑class compile‑time values that can appear in types, contracts, and `where` clauses, enabling symbolic reasoning across type instances.
-- `Rational<p, q>` fixed‑precision rationals
-- `Regex<"...">` compile‑time regex
 - MMIO types and interrupt vector generation
 - `@audit_log` attribute
 - `@link_proof` external proof integration
