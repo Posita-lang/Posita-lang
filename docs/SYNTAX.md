@@ -1,5 +1,5 @@
 # Posita Language Syntax
-**Document revision: 2026-07-23** (working draft, not a frozen specification)
+**Document revision: 2026-07-24** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -989,6 +989,27 @@ comptime { /* compile‑time code */ }
 `comptime` blocks are generic compile‑time computation engines. They may contain statements (including loops, conditionals, and calls to `comptime` functions), but **they may not contain item‑level declarations** such as `impl`, `type`, or `def`. This restriction ensures that `comptime` blocks cannot silently inject new bindings into the enclosing scope, preserving the principle that a type's complete behavior is statically known from its definition site.
 
 For declarative code generation that produces module‑level declarations, see `generate` blocks (planned).
+
+### Capturing Outer Constants
+
+By default, a `comptime` block cannot refer to variables from the enclosing runtime
+scope. To make compile‑time‑known values accessible, provide an explicit capture
+list after the `comptime` keyword:
+
+```posita
+set answer = 42;
+comptime [answer] {
+    // answer is a compile‑time constant here
+    @compile_error!("The answer is {}.", answer);
+}
+```
+
+Each captured variable must be an immutable binding (`set` or `let`) whose
+initializer is a **compile‑time constant expression**—a literal, a pure
+`comptime` function call, or a combination of other captured compile‑time
+constants. The compiler evaluates the initializer at compile time and makes the
+value available inside the block. Attempting to capture a variable whose value
+cannot be determined at compile time results in a compile‑time error.
 
 ### comptime Functions
 ```posita
