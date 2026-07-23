@@ -1,5 +1,5 @@
 # Posita Language Syntax
-**Document revision: 2026-07-19** (working draft, not a frozen specification)
+**Document revision: 2026-07-23** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -1187,6 +1187,52 @@ match value {
 
 > **GADT Refinement**: When matching on a GADT enum, the compiler automatically refines the enum’s type parameters according to the variant’s `when` clauses. Within each branch, the type equalities implied by the matched variant become available, enabling type‑safe operations without casts. See the GADT section for details.
 
+#### Slice Patterns
+
+Slice patterns allow destructuring of slices (`&[T]`) and arrays (`[T; N]`) without copying elements. They are usable in `match`, `if let`, `while let`, `for`, and `loop` contexts. All element and sub‑slice bindings are **views** onto the original data; no allocation or element‑wise copy occurs.
+
+**Supported forms** (where `T` is the element type, and `view` is of type `&[T]`):
+
+| Pattern | Matches | Bindings |
+|---------|---------|----------|
+| `[]` | Empty slice | – |
+| `[_]` | Exactly one element | – (element ignored) |
+| `[x]` | Exactly one element | `x: &T` (immutable reference to element) |
+| `[x, ..rest]` | At least one element | `x: &T`, `rest: &[T]` (remaining sub‑slice) |
+| `[..init, x]` | At least one element | `init: &[T]`, `x: &T` |
+| `[x, ..mid, y]` | At least two elements | `x: &T`, `mid: &[T]`, `y: &T` |
+| `_` | Any slice | – |
+
+**Binding rules**:
+- Element bindings (`x`, `y` etc.) are always of type `&T`, regardless of whether `T` implements `Copy`. This avoids any ownership transfer and keeps the original slice intact.
+- Sub‑slice bindings (`rest`, `mid`, `init`) are of type `&[T]`.
+- To obtain an owned copy of an element when `T: Copy`, use a separate `let` statement (e.g., `let val = *x;`).
+- Patterns are refutable unless they cover all possible lengths. For example, `[]` is irrefutable only for an empty slice; `[x, ..rest]` is irrefutable for any non‑empty slice but refutable for a general `&[T]`.
+
+**Examples**:
+
+```posita
+def sum(xs: &[Int<32>]) -> Int<32> {
+    match xs {
+        [] => 0,
+        [head, ..tail] => *head + sum(tail),
+    }
+}
+
+def is_palindrome(xs: &[Int<32>]) -> Bool {
+    loop view = xs {
+        [] | [_] => return true,
+        [first, ..middle, last] if *first == *last => continue middle,
+        _ => return false,
+    }
+}
+```
+
+In the `loop` form, the initial view is bound to a mutable local variable (here `view`), which is updated by `continue middle` to the sub‑slice. The `decreases` clause may reference `view'len` to prove termination.
+
+**Interaction with borrowing**:  
+A slice pattern binds references derived from the original slice. The original data remains borrowed (immutably) until all bindings go out of scope. This is enforced by the existing borrow checker.
+
 ### Structured Resource Cleanup
 
 Posita provides three complementary mechanisms for resource cleanup, each with distinct guarantees. The following table summarizes their roles:
@@ -1325,6 +1371,7 @@ Rounding suffixes for float‑to‑int conversion: `round`, `trunc` (default), `
 | 6 | `\|` | left‑to‑right |
 | 7 | `==`, `!=`, `<`, `>`, `<=`, `>=` | left‑to‑right |
 | 8 | `and` | left‑to‑right |
+| – | `implies` | right‑to‑left (only in contracts) |
 | 9 | `or` | left‑to‑right |
 | 10 | `not` | right‑to‑left (prefix) |
 | 11 (lowest) | `..`, `..=` | left‑to‑right |
@@ -1845,7 +1892,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, and more.
 
 ---
 
@@ -2070,11 +2117,11 @@ A: Yes. Posita supports Generalized Algebraic Data Types (GADTs) where enum vari
 **Q: How do GADTs interact with `with default`?**
 A: Currently, an enum containing any variant with a `when` constraint cannot have a `with default` clause. This is because a single default value cannot be valid for all possible instantiations. This restriction may be relaxed in the future for monomorphic instances. See the GADTs section for more.
 
-**Q: What is `codomain` and how does it differ from the old `result`?**  
-**A:** `codomain` is the reserved keyword used in `ensures` clauses to refer to the function’s return value, replacing an earlier, undocumented use of `result` in contracts. The change was driven not just by the risk of variable‑name collisions but, more importantly, by readability: `result` is an extremely common identifier in business logic, which could cause reviewers to mistake it for a local variable rather than a contract keyword, whereas the mathematical term *codomain* is rarely used as a variable name and immediately signals “this is the function’s output.” `codomain` cannot be used as an ordinary variable or parameter name anywhere in the program. For postconditions that need to distinguish among different return paths, `@label` annotations on `return` statements can be combined with `ensures @label => ...`; these work alongside `codomain` and do not replace it.
+**Q: What is `codomain` and how does it differ from the old `result`?**
+A: `codomain` is the reserved keyword used in `ensures` clauses to refer to the function's return value, replacing an earlier, undocumented use of `result` in contracts. The change was driven not just by the risk of variable‑name collisions but, more importantly, by readability: `result` is an extremely common identifier in business logic, which could cause reviewers to mistake it for a local variable rather than a contract keyword, whereas the mathematical term *codomain* is rarely used as a variable name and immediately signals "this is the function's output." `codomain` cannot be used as an ordinary variable or parameter name anywhere in the program. For postconditions that need to distinguish among different return paths, `@label` annotations on `return` statements can be combined with `ensures @label property`; these work alongside `codomain` and do not replace it.
 
 **Q: How do I write different postconditions for different return paths without using an enum?**
-A: Use **path labels**. Attach `@label` to a `return` statement (e.g., `return @fast x * 2;`) and write `ensures @fast => ...` in the contract. Multiple labels can be assigned to a single return, and a label can be used on several returns. Labels are scoped to the function and checked for consistency. See the "Return Value and Path Labels" section for examples.
+A: Use **path labels**. Attach `@label` to a `return` statement (e.g., `return @fast x * 2;`) and write `ensures @fast < 100` in the contract. Multiple labels can be assigned to a single return, and a label can be used on several returns. Labels are scoped to the function and checked for consistency. See the "Return Value and Path Labels" section for examples.
 
 **Q: What are affine and linear types in Posita?**
 A: All non‑`Copy` types are affine: they can be moved or discarded, but not duplicated. `@linear` types are a stricter subset that also forbid implicit discarding—they must be explicitly consumed (e.g., by passing to a consumer function or calling `forget`). This provides fine‑grained control over resources that must never be silently dropped. See the "Affine and Linear Types" section for details.
