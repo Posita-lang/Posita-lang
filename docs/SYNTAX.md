@@ -1011,6 +1011,17 @@ constants. The compiler evaluates the initializer at compile time and makes the
 value available inside the block. Attempting to capture a variable whose value
 cannot be determined at compile time results in a compile‑time error.
 
+### Comptime Blocks as Expressions
+
+A `comptime` block may be used as an expression. In that case, the block's
+value is computed at compile time and treated as a compile‑time constant. The
+resulting value can be assigned to an immutable variable with `set` and later
+captured into other `comptime` blocks via the explicit capture syntax.
+
+A `comptime` block cannot access variables declared in another `comptime` block
+directly; all compile‑time data sharing must go through the explicit capture
+mechanism.
+
 ### comptime Functions
 ```posita
 comptime def eval_polynomial(...) -> Int<64> { ... }
