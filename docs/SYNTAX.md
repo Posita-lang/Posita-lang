@@ -1080,6 +1080,27 @@ A `comptime` block cannot access variables declared in another `comptime` block
 directly; all compile‑time data sharing must go through the explicit capture
 mechanism.
 
+### Trust Boundaries in comptime Blocks
+
+A `comptime` block may optionally be annotated `@trusted`:
+
+```posita
+comptime @trusted [captures] { ... }
+```
+
+An `@trusted` comptime block is allowed to:
+- Call `@trusted` functions and methods
+- Access `unsafe` operations
+
+The block's author assumes full responsibility for satisfying the contracts
+of all `@trusted` operations within it. The compiler will not verify these
+contracts at compile time. Non‑`@trusted` comptime blocks cannot call
+`@trusted` functions or contain `unsafe` code.
+
+This mechanism mirrors the runtime `@trusted` function annotation and ensures
+that trust boundaries remain explicit and auditable even during compile‑time
+execution.
+
 ### comptime Functions
 ```posita
 comptime def eval_polynomial(...) -> Int<64> { ... }
