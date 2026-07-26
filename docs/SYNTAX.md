@@ -1,5 +1,5 @@
 # Posita Language Syntax
-**Document revision: 2026-07-24** (working draft, not a frozen specification)
+**Document revision: 2026-07-26** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -391,6 +391,27 @@ The `exists` keyword introduces a name for the value being constrained. This nam
   } with missing_match = "You must handle all three states: Init, Running, and Stopped.";
   ```
   The `@exhaustive` attribute on an enum forces all `match`, `if let`, and `while let` sites to be exhaustive, preventing future variants from being silently ignored.
+
+### Type Alias Impl Trait (TAIT)
+
+A type alias can hide its concrete implementation by using `impl Trait`:
+
+```posita
+pub type MyIter = impl Iterator<Item = u32>;
+
+pub def make_iter() -> MyIter {
+    0..10   // concrete type is Range<u32>, inferred by compiler
+}
+```
+
+- `MyIter` is an opaque type: external code only knows it implements
+  `Iterator<Item = u32>`. The exact type is determined by the defining
+  module and is not visible externally.
+- All defining uses of a TAIT must resolve to the same concrete type
+  (single-definition rule).
+- TAIT is monomorphized at compile time; there is no dynamic dispatch.
+- Contracts on `MyIter` can only reference properties guaranteed by
+  the trait (e.g., `codomain.count() == 10`).
 
 #### Enum Set Aliases
 
@@ -801,7 +822,7 @@ trait Add<Rhs = Self> {
 trait Iterator {
     type Item;
     type Distance = usize;  // associated type with default value
-    fn next(&mut self) -> Option<Self::Item>;
+    def next(&mut self) -> Option<Self::Item>;
 }
 
 trait Default {
@@ -865,10 +886,31 @@ impl Drop for UniqueToken {
 ```
 
 ### Automatic Clone for Copy Types
-When `Copy` is automatically derived (or manually implemented), the compiler also automatically derives `Clone` with `fn clone(&self) -> Self { *self }`.
+When `Copy` is automatically derived (or manually implemented), the compiler also automatically derives `Clone` with `def clone(&self) -> Self { *self }`.
 
 ### Associated Types and Projections
 Associated types are accessed via the `::` operator: `T::Output`. In `where` clauses they are used to constrain relationships between types.
+
+### Higher-Ranked Trait Bounds (HRTB)
+
+In `where` clauses, a trait bound can quantify over all possible lifetimes
+using the `for<...>` syntax:
+
+```posita
+def apply_to_refs<F>(f: F, x: &Int<32>) -> &Int<32>
+    where F: for<'a> Fn(&'a Int<32>) -> &'a Int<32>
+{
+    f(x)
+}
+```
+
+- `for<'a>` introduces one or more lifetime parameters scoped over the
+  subsequent trait bound.
+- The bound `F: for<'a> Fn(&'a T) -> &'a T` means: for *any* lifetime `'a`,
+  `F` implements the `Fn` trait with that lifetime.
+- HRTB can also appear in `constraint` blocks and `@lemma` contracts.
+- The compiler translates `for`-quantified lifetimes into universally
+  quantified variables in the SMT solver when verifying contracts.
 
 ### Operator Desugaring
 
@@ -1221,6 +1263,12 @@ Variables are immutable by default. Use `mut` for mutability:
 set mut x = 0;
 x = x + 1;
 ```
+
+**Variable shadowing:** A variable declared in an inner scope may shadow
+a variable of the same name from an outer scope. This is allowed and follows
+lexical scoping rules. However, the compiler will reject shadowing of
+reserved contract keywords (`codomain`, `old`, etc.). Redeclaring an
+immutable variable with the same name in the *same* scope is also an error.
 
 ### `let` Bindings
 `let` is a restricted, immutable‑only variant of `set` that additionally supports pattern destructuring. A `let` binding is always immutable; there is no `let mut`. It must always be explicitly initialized and cannot rely on a type's default value. A `let` binding that specifies a type annotation without an explicit initializer (`let x: Type;`) is a compile‑time error; use `set` instead.
