@@ -24,7 +24,7 @@ Posita is a **ultra‑static, systems programming language** where the programme
 `where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`, `const`, `forall`
 
 `Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words.  
-`linear`, `consume` are planned keywords; `by` is reserved for future use.
+`linear`, `consume` are planned keywords; `by` is reserved for closure capture syntax.
 
 ### Identifiers
 `[a‑zA‑Z_][a‑zA‑Z0‑9_]*`
@@ -33,7 +33,8 @@ Posita is a **ultra‑static, systems programming language** where the programme
 - Integers: `42`, `0xFF`, `0b1010`
 - Integer suffixes for explicit bit‑width: `42i32` (equivalent to `42: Int<32>`), `0xFFu8` (equivalent to `0xFF: UInt<8>`). The suffix is syntactic sugar and the type is fully checked.
 - Floats: `3.14`, `2.5e-3` (type `Float<64>` by default)
-- Characters: `'a'` (UTF‑8, type `UInt<8>`)
+- Characters: `'a'` (type `Char`, a Unicode scalar value)
+- Byte characters: `b'x'` (type `Byte`, an alias for `UInt<8>`)
 - Byte strings: `b"hello\n"` (type `&[Byte]`, see Escape Sequences)
 - Strings: `"hello"` (type `&Str`, guaranteed valid UTF‑8, see Escape Sequences)
 - Booleans: `true`, `false`
@@ -44,6 +45,10 @@ Posita is a **ultra‑static, systems programming language** where the programme
 set one: PositiveInt = 1;               // type inferred from declaration
 set also_one = 1: PositiveInt;          // type explicitly annotated on the literal
 ```
+
+**Built‑in type aliases**:
+- `type Byte = UInt<8>;` — raw byte, used in byte strings and byte slices.
+- `type Char = UInt<32>;` with invariant `value <= 0x10FFFF` and `not (0xD800 <= value <= 0xDFFF)` — a Unicode scalar value.
 
 ### Escape Sequences
 
@@ -61,9 +66,9 @@ The following escape sequences are recognized in string literals, byte string li
 | `\xNN` | Hex Byte (2 digits) | 0xNN |
 | `\u{NNNNNN}` | Unicode Scalar (1‑6 hex digits) | UTF‑8 encoded bytes |
 
-In character literals (`'...'`), the escape must resolve to exactly one valid Unicode scalar value.
-
-In byte strings (`b"..."`) and byte characters, `\u{...}` is not valid (byte strings contain raw bytes, not UTF‑8).
+In character literals (`'...'`), the escape must resolve to exactly one valid Unicode scalar value of type `Char`.
+In byte characters (`b'...'`), `\u{...}` is not valid; only byte escapes may appear.
+In byte strings (`b"..."`), the same restriction holds.
 
 The sequences `\a`, `\b`, `\v`, `\f`, and `\?` are not recognized in Posita string literals. If needed, use the equivalent `\xNN` form.
 
@@ -213,7 +218,7 @@ if the code were hand‑written for each constant, with all checks resolved at
 compile time.
 
 ### Bit‑width Parameterized Integers
-- Signed: `Int<bits>`, `bits` must be compile‑time constant, 1..64.
+- Signed: `Int<bits>`, `bits` must be compile‑time constant, 1..64 (up to 128 with `--enable-experimental`).
 - Unsigned: `UInt<bits>`.
 - Example: `Int<13>`, `UInt<8>`.
 
@@ -299,7 +304,7 @@ References (`&T`, `&mut T`) and pointers (`*T`, `Ptr<pointee = T>`) require `T` 
 ### Explicit Lifetime Parameters
 When the compiler cannot infer lifetimes, you may annotate them explicitly:
 ```posita
-def process<'a>(x: &'a mut Data, y: &'a Data) -> &'a mut Result { ... }
+def process<'a, T, E>(x: &'a mut Data, y: &'a Data) -> &'a mut Result<T, E> { ... }
 ```
 Lifetime annotations are verified by the borrow checker; mismatches cause compile errors. They serve only for disambiguation.
 
@@ -323,13 +328,13 @@ The default value **must satisfy any type invariants**; otherwise the compiler w
 **Semantically Sensitive Defaults and `no_default`**:
 For types where a "blank" default is semantically dangerous, you can forbid implicit initialization with `with no_default`:
 ```posita
-type OwnedFd = Int<32>
+type OwnedFd = exists n: Int<32>
     invariant n >= 0
     with no_default;   // must explicitly initialize
 ```
 Declaring `set fd: OwnedFd;` will then be a compile‑time error. The `with no_default` clause is the only way to forbid implicit initialization; there is no `@no_default` attribute.
 
-> **GADT enums:** If an enum definition contains any variant with a `when` constraint (see GADTs), the `with default` clause is currently prohibited. This is because a single default value cannot be valid for all possible instantiations of the enum’s type parameters. This restriction may be relaxed in the future.
+> **GADT enums:** If a generic enum contains any variant with a `when` constraint that involves its type parameters, the `with default` clause is prohibited. For non‑generic enums, `when` constraints that involve only global constants do not affect `with default` eligibility. This restriction may be relaxed in the future.
 
 ### Construction Validation
 A type may specify a validation function that is automatically called after every explicit construction.
@@ -400,7 +405,7 @@ A type alias can hide its concrete implementation by using `impl Trait`:
 pub type MyIter = impl Iterator<Item = UInt<32>>;
 
 pub def make_iter() -> MyIter {
-    0..10   // concrete type is Range<UInt<32>>, inferred by compiler
+    return 0..10;   // concrete type is Range<UInt<32>>, inferred by compiler
 }
 ```
 
@@ -428,7 +433,7 @@ def read_and_parse() -> Result<Data, IoOrParseError> {
 ```
 
 - **Restriction**: The `|` operator is only permitted in `type` alias declarations. Inline `A | B` in function signatures is not allowed; the combination must be given an explicit name.
-- **Variant uniqueness**: All variant names across the combined enums must be distinct. If two enums share a variant name (e.g., both define `Timeout`), the compiler reports an error. Disambiguation requires qualifying the variant name with its enum type (e.g., `IoError::Timeout` vs `NetError::Timeout`), but this is only permitted in `catch` and `match` patterns, not in type declarations.
+- **Variant uniqueness**: All variant names across the combined enums must be distinct. If two enums share a variant name (e.g., both define `Timeout`), the compiler reports an error. Disambiguation requires qualifying the variant name with its enum type (e.g., `IoError::Timeout` vs `NetError::Timeout`), which is permitted in `catch` and `match` patterns when the variant name is ambiguous, but not in type declarations.
 - **Transparency**: The alias is fully transparent to the type system. The compiler expands `IoOrParseError` to the full set of variants at compile time. `catch` branches, `@must_handle` annotations, and `match` expressions can reference individual variants by their original names without qualifying through the alias.
 - **Recursive sets**: An enum set alias may include other set aliases in its definition (e.g., `type AppError = IoOrParseError | DbError`). The compiler flattens the chain into a single variant set.
 
@@ -483,10 +488,10 @@ When a GADT value is examined via `match`, `if let`, or `while let`, the compile
 ```posita
 def eval<T>(e: Expr<T>) -> T {
     match e {
-        Lit(n) => n,                         // T refined to Int<32>, n: Int<32>
-        IsZero(inner) => eval(inner) == 0,  // T refined to Bool, inner: Expr<Int<32>>
+        Lit(n) => return n,                         // T refined to Int<32>, n: Int<32>
+        IsZero(inner) => return eval(inner) == 0,  // T refined to Bool, inner: Expr<Int<32>>
         If(cond, then_expr, else_expr) => {
-            if eval(cond) { eval(then_expr) } else { eval(else_expr) }
+            if eval(cond) { return eval(then_expr) } else { return eval(else_expr) }
         },
     }
 }
@@ -508,19 +513,17 @@ This dead‑variant elimination works automatically. When the `@exhaustive` attr
 
 ##### Interaction with `with default`
 
-A type‑level default value declared with `with default` must be valid for all possible instances of the type. For a GADT enum with type parameters, a default value would need to exist for every legal instantiation of the type parameters. Because variants are constrained by `when` clauses, it is generally impossible to provide a single default expression that is well‑typed under all possible constraints.
+A type‑level default value declared with `with default` must be valid for all possible instances of the type. For a generic GADT enum whose variants carry `when` constraints involving the type parameters, a single default value cannot in general be well‑typed under all possible constraints.
 
-Therefore, **currently, if an enum definition contains any variant with a `when` clause, the `with default` clause is prohibited.** This restriction may be relaxed in the future for enums where all variants’ constraints are equivalent (e.g., all constrain `T` to the same concrete type), or through specialized default annotations per instantiation. For now, the compiler emits an error if `with default` is used on a GADT enum.
+Therefore, **if a generic enum contains any variant with a `when` clause that involves its type parameters, the `with default` clause is prohibited.** For non‑generic enums, `when` constraints that involve only global constants do not affect `with default` eligibility. This restriction may be relaxed in the future for monomorphic instances.
 
 ```posita
-// Error: GADT enum cannot have a default value
+// Error: generic GADT enum cannot have a default value
 type Expr<T> = enum {
     Lit(Int<32>) when T == Int<32>,
     ...
 } with default = Lit(0);  // compile-time error
 ```
-
-For enums without type parameters but with `when` constraints that involve only global constants (not type parameters), `with default` remains allowed because no generic instantiation is affected. (This scenario is rare and equivalent to a plain enum.)
 
 ##### Construction and Validation
 
@@ -531,7 +534,7 @@ Constructors of GADT variants are subject to the same type‑checking and contra
 - Only type equality constraints (`T == ConcreteType`) are supported in the initial implementation. Constraints such as `T: SomeTrait` or `T != U` are not yet allowed.
 - The constraint expressions are evaluated at compile time and cannot depend on runtime values.
 - GADT constraints do not interact with the SMT solver used for contract verification; they are entirely a type‑system feature.
-- Default values for GADT enums are currently prohibited; a future version may allow default values for specific monomorphic instances using a syntax like `default for Expr<Bool> = ...` (planned).
+- Default values for generic GADT enums are currently prohibited; a future version may allow default values for specific monomorphic instances using a syntax like `default for Expr<Bool> = ...` (planned).
 
 ##### Examples
 
@@ -739,15 +742,15 @@ Ghost variables follow the same mutability rules as regular variables. `ghost se
 ```posita
 def get_adult_names(users: &[User]) -> Vector<String>
     requires users'len > 0
-    requires exists user in users where user.age >= 18
+    requires exists user in users: user.age >= 18
     ensures codomain'len >= 1
 {
-    set mut names = Vector<String>::new();//The syntax with turbofish should not appear at all.
-    ghost set mut found_adult: bool = false;
+    set mut names = Vector<String>::new();
+    ghost set mut found_adult: Bool = false;
 
     for i in 0..users'len
         invariant if found_adult { names'len >= 1 } else { true }
-        invariant (exists u in users[0..i] where u.age >= 18) implies found_adult
+        invariant (exists u in users[0..i]: u.age >= 18) implies found_adult
     {
         set user = users[i];
         if user.age >= 18 {
@@ -843,6 +846,11 @@ trait Deref {
     type Target;
     def deref(&self) -> &Self::Target;
 }
+
+trait Fn<Args...> {
+    type Output;
+    def call(&self, args: Args) -> Self::Output;
+}
 ```
 Within a trait definition, `type Name = DefaultType;` declares an associated type with a default value. Implementations may override the default or use it as‑is.
 
@@ -857,9 +865,9 @@ A `Deref` implementation without `@auto_deref` does not participate in auto‑de
 
 ```posita
 // Standard library Rc<T> – auto‑deref is enabled by the type author
+@auto_deref
 impl<T> Deref for Rc<T> {
     type Target = T;
-    @auto_deref
     def deref(&self) -> &T { /* … */ }
 }
 
@@ -886,7 +894,7 @@ impl Drop for UniqueToken {
 ```
 
 ### Automatic Clone for Copy Types
-When `Copy` is automatically derived (or manually implemented), the compiler also automatically derives `Clone` with `def clone(&self) -> Self { *self }`.
+When `Copy` is automatically derived (or manually implemented), the compiler also automatically derives `Clone` with `def clone(&self) -> Self { return *self; }`.
 
 ### Associated Types and Projections
 Associated types are accessed via the `::` operator: `T::Output`. In `where` clauses they are used to constrain relationships between types.
@@ -943,7 +951,7 @@ The error propagation operator `?`, the compile‑time call marker `!`, and the 
 When static dispatch is not possible (e.g., heterogeneous collections), the `dyn` keyword creates a trait object: `dyn Trait`. Trait objects use dynamic dispatch via a vtable and may incur a heap allocation. Their use is explicit to ensure reviewers can identify runtime dispatch points.
 
 ```posita
-let handlers: [dyn Fn(Int<32>) -> Int<32>; 10];
+set handlers: [dyn Fn(Int<32>) -> Int<32>; 10] = default;
 ```
 
 **Restrictions in strict mode**: In strict mode, constructing or calling through a `dyn Trait` object is only allowed inside `@trusted` functions, because the compiler cannot statically determine the concrete implementation and therefore cannot perform contract verification or exhaustive control‑flow analysis across the dispatch boundary. See the Safety Guarantees section for details.
@@ -957,6 +965,7 @@ The following traits are defined by the language and automatically implemented f
 - `Default` – default value construction
 - `Drop` – destructor
 - `Deref` – explicit dereferencing; `@auto_deref` may be attached to grant method‑call auto‑deref
+- `Fn` – callable objects (functions and closures)
 - `Display` – formatting
 - `Serialize`, `Write` – I/O traits (standard library)
 
@@ -973,7 +982,7 @@ set worker = task { /* code */ };
 ### Channels
 Typed, bounded, synchronous channels:
 ```posita
-set (sender, receiver) = Channel<Int<32>>::new(16);
+let (sender, receiver) = Channel<Int<32>>::new(16);
 ```
 
 ### `async`/`await`
@@ -1019,7 +1028,6 @@ All symbols are **private by default**. Use `pub` to export.
 ### Importing
 - `import std::io;` — qualified access `io::puts(...)`.
 - `import std::io as my_io;` — alias.
-- `from std::io import { puts, File };` — selective.
 - `import std::{io, fs};` — nested paths.
 - **Wildcard import is prohibited** (`import *` is illegal).
 
@@ -1047,7 +1055,7 @@ def old_method() { ... }
 @experimental
 type NewInteger = Int<128>;
 ```
-Requires `--enable-experimental` flag.
+Requires `--enable-experimental` flag. When enabled, `Int<bits>` may accept bit widths up to 128.
 
 ### Conditional Compilation
 Modules, functions, or type definitions can be conditionally compiled using the `@cfg` attribute with the `all`, `any`, `not` combinators:
@@ -1079,7 +1087,7 @@ Posita does not support procedural macros or any form of syntax‑level code gen
 
 Violations are detected at compile time and cause a hard error. This guarantees that `comptime` evaluation is purely a deterministic, side‑effect‑free transformation of the source program.
 
-**Proof obligations for generated code**: Code generated by `comptime` is subject to the same verification standards as hand‑written code. Any `@trusted` function produced by `comptime` must include corresponding `@link_proof` or `@comptime_test` evidence; otherwise, compilation fails in strict mode.
+**Proof obligations for generated code**: Code generated by `generate` blocks is subject to the same verification standards as hand‑written code. Any `@trusted` function produced by `generate` must include corresponding `@link_proof` or `@comptime_test` evidence; otherwise, compilation fails in strict mode.
 
 ### comptime Blocks
 ```posita
@@ -1380,15 +1388,19 @@ def sum(xs: &[Int<32>]) -> Int<32> {
 }
 
 def is_palindrome(xs: &[Int<32>]) -> Bool {
-    loop view = xs {
-        [] | [_] => return true,
-        [first, ..middle, last] if *first == *last => continue middle,
-        _ => return false,
+    set mut remaining = xs;
+    loop {
+        match remaining {
+            [] | [_] => return true,
+            [first, ..middle, last] if *first == *last => {
+                remaining = middle;
+                continue;
+            },
+            _ => return false,
+        }
     }
 }
 ```
-
-In the `loop` form, the initial view is bound to a mutable local variable (here `view`), which is updated by `continue middle` to the sub‑slice. The `decreases` clause may reference `view'len` to prove termination.
 
 **Interaction with borrowing**:  
 A slice pattern binds references derived from the original slice. The original data remains borrowed (immutably) until all bindings go out of scope. This is enforced by the existing borrow checker.
@@ -1455,7 +1467,7 @@ allowing conditional resource management without runtime overhead.
 - The block captures variables from the enclosing scope immutably or via `&mut` (subject to borrow rules). It is not a first‑class closure; it cannot escape the scope.
 - Multiple `scope_cleanup` blocks in the same scope execute in **LIFO** (last‑in, first‑out) order when the scope is exited.
 - An explicit `trigger @name;` statement executes the cleanup block immediately and removes it from the deferred list. It will not execute again at scope exit. `trigger` is a statement, not an expression.
-- **Early exits (`return`, `leave with`, `break`, `continue` to outer labels) are compile‑time errors inside a `scope_cleanup` block.** This ensures the block is non‑escaping and preserves the LIFO execution guarantee.
+- **Early exits (`return`, `leave with`, `leave`, `continue` to outer labels) are compile‑time errors inside a `scope_cleanup` block.** This ensures the block is non‑escaping and preserves the LIFO execution guarantee.
 
 **Error handling:**
 
@@ -1492,8 +1504,7 @@ def process() -> Result<(), DbError> {
     // ... business logic ...
     db.commit()?;
     ghost set committed = true;
-    Ok(())
-    // scope_cleanup runs only if committed is still false
+    return Ok(());
 }
 ```
 
@@ -1531,7 +1542,15 @@ Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
 Dereference: `*ptr`
 Address‑of: `&var`
 Cast: `value as NewType` (safe), `value as! NewType` (bitcast)
-Rounding suffixes for float‑to‑int conversion: `round`, `trunc` (default), `ceil`, `floor`.
+
+**Rounding suffixes for float‑to‑int conversion** appear after the target type in an `as` cast:
+
+```posita
+value as Int<32> round   // round to nearest, ties to even
+value as Int<32> trunc   // truncate toward zero (default)
+value as Int<32> ceil    // ceiling
+value as Int<32> floor   // floor
+```
 
 **Operator precedence** (highest to lowest):
 
@@ -1651,7 +1670,7 @@ No type‑erased errors; fully monomorphized, zero overhead.
 When a function is annotated `@no_alloc_error`, the compiler verifies that every `?` propagation path uses only `From` implementations that are themselves `@no_alloc`. If any conversion in the error path could allocate, the `?` operator is rejected. Simple enum‑to‑enum conversions without payload transformations automatically satisfy this requirement.
 
 ### Handling Errors Locally with `catch`
-A `catch` expression has the type `T` where the preceding expression has type `Result<T, E>`. Each branch of `catch` must either diverge (via `leave with`, `panic`, etc.) or produce a value of type `T`. The patterns in `catch` branches are the enum variant names directly (e.g., `|IoError| { ... }`), not qualified paths, because the error type is already known from the expression.
+A `catch` expression has the type `T` where the preceding expression has type `Result<T, E>`. Each branch of `catch` must either diverge (via `leave with`, `panic`, etc.) or produce a value of type `T`. The patterns in `catch` branches are the enum variant names directly (e.g., `|IoError| { ... }`), not qualified paths, because the error type is already known from the expression. If a variant name is ambiguous in the current scope, the compiler requires explicit qualification using `EnumName::Variant`.
 
 If the enclosing function does not return a `Result` whose error type can carry unmatched variants, a `catch` expression must be exhaustive over `E`, or must include a wildcard branch that produces a value of type `T`. Otherwise, any unmatched variant is implicitly propagated—equivalent to `leave with Err(unmatched_variant)`—which is only valid when the function returns a `Result<_, E>`.
 
@@ -1706,7 +1725,7 @@ The compiler accepts the error value directly:
 ```posita
 def example() -> Result<Int<32>, MyError> {
     set x = dangerous_op() catch {
-        |err| leave with err;
+        |e| leave with e;          // binds the whole error value
     };
     // ...
 }
@@ -1837,7 +1856,7 @@ def increment(x: &mut Int<32>)
 ```posita
 def divide(a: Int<32>, b: Int<32>) -> Int<32>
     requires b != 0
-    ensures codomain * b == a
+    ensures a == codomain * b + a % b
 { return a / b; }
 
 def factorial(n: Int<32>) -> Int<32>
@@ -1878,7 +1897,7 @@ Invariants and decreases clauses must appear immediately after the loop header, 
 expression `A implies B` is true if either `A` is false or `B` is true.
 It is available in all contract contexts and is evaluated in the
 mathematical (ideal) domain, without short‑circuit semantics.
-- `forall` and `exists` quantifiers may appear in contracts:
+- `forall` and `exists` quantifiers may appear in contracts. They use the colon syntax:
   ```posita
   requires forall i in 0..arr'len: arr[i] > 0
   requires exists i in 0..arr'len: arr[i] == target
@@ -1894,6 +1913,12 @@ def serialize<T, S>(value: &T, stream: &mut S) -> Result<(), Error>
     where T: Serialize, S: Write, T::Format: Display
 { ... }
 ```
+
+A trait bound may also be written inline in the parameter list:
+```posita
+def identity<T: Copy + Default>(x: T) -> T { return T::default(); }
+```
+This is syntactic sugar for `where T: Copy + Default`.
 
 The `where` clause also supports tuple syntax to apply a multi‑type constraint to a tuple of type parameters:
 ```posita
@@ -1914,7 +1939,7 @@ Constraints may be combined with `+`: `def f<T>() where T: A + B { ... }`. Const
 Posita avoids implicit conversions between literals and dynamic containers. Compile‑time functions provide ergonomic initialization. The `...args: T` syntax declares a variadic parameter; inside the function `args` is accessible as a `&[T]` slice.
 ```posita
 comptime def vec<T>(...args: T) -> Vector<T> {
-    set v = Vector::with_capacity(args'len);
+    set mut v = Vector::with_capacity(args'len);
     for a in args { v.push(a); }
     return v;
 }
@@ -1973,7 +1998,7 @@ def safe_puts(msg: &[Byte]) -> Result<(), AppError>
     ensures codomain == Ok(())
 {
     unsafe { puts(msg); }
-    Ok(())
+    return Ok(());
 }
 
 type EmployeeId = UInt<16> with default = 0;
@@ -2297,7 +2322,7 @@ A: `poly(expr)` boxes a polymorphic expression (like a generic function) into a 
 A: Yes. Posita supports Generalized Algebraic Data Types (GADTs) where enum variants can carry type equality constraints using the `when` keyword. This enables type‑safe embedded DSLs and precise type refinement during pattern matching. See the "Generalized Algebraic Data Types" section for full details.
 
 **Q: How do GADTs interact with `with default`?**
-A: Currently, an enum containing any variant with a `when` constraint cannot have a `with default` clause. This is because a single default value cannot be valid for all possible instantiations. This restriction may be relaxed in the future for monomorphic instances. See the GADTs section for more.
+A: For generic enums whose variants have `when` constraints involving the type parameters, `with default` is prohibited. For non‑generic enums, `when` constraints using only global constants are allowed. See the GADT section for more.
 
 **Q: What is `codomain` and how does it differ from the old `result`?**
 A: `codomain` is the reserved keyword used in `ensures` clauses to refer to the function's return value, replacing an earlier, undocumented use of `result` in contracts. The change was driven not just by the risk of variable‑name collisions but, more importantly, by readability: `result` is an extremely common identifier in business logic, which could cause reviewers to mistake it for a local variable rather than a contract keyword, whereas the mathematical term *codomain* is rarely used as a variable name and immediately signals "this is the function's output." `codomain` cannot be used as an ordinary variable or parameter name anywhere in the program. For postconditions that need to distinguish among different return paths, `@label` annotations on `return` statements can be combined with `ensures @label property`; these work alongside `codomain` and do not replace it.
