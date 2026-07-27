@@ -1,5 +1,5 @@
 # Posita Language Syntax
-**Document revision: 2026-07-26** (working draft, not a frozen specification)
+**Document revision: 2026-07-27** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -21,7 +21,7 @@ Posita is a **ultra‑static, systems programming language** where the programme
 `def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`,
 `comptime`, `import`, `as`, `true`, `false`, `auto`, `and`, `or`, `not`, `sizeof`, `alignof`,
 `catch`, `panic`, `unsafe`, `let`, `finally`,
-`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`
+`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`, `const`, `forall`
 
 `Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words.  
 `linear`, `consume` are planned keywords; `by` is reserved for future use.
@@ -397,15 +397,15 @@ The `exists` keyword introduces a name for the value being constrained. This nam
 A type alias can hide its concrete implementation by using `impl Trait`:
 
 ```posita
-pub type MyIter = impl Iterator<Item = u32>;
+pub type MyIter = impl Iterator<Item = UInt<32>>;
 
 pub def make_iter() -> MyIter {
-    0..10   // concrete type is Range<u32>, inferred by compiler
+    0..10   // concrete type is Range<UInt<32>>, inferred by compiler
 }
 ```
 
 - `MyIter` is an opaque type: external code only knows it implements
-  `Iterator<Item = u32>`. The exact type is determined by the defining
+  `Iterator<Item = UInt<32>>`. The exact type is determined by the defining
   module and is not visible externally.
 - All defining uses of a TAIT must resolve to the same concrete type
   (single-definition rule).
@@ -484,15 +484,15 @@ When a GADT value is examined via `match`, `if let`, or `while let`, the compile
 def eval<T>(e: Expr<T>) -> T {
     match e {
         Lit(n) => n,                         // T refined to Int<32>, n: Int<32>
-        IsZero(inner) => eval!(inner) == 0, // T refined to Bool, inner: Expr<Int<32>>
+        IsZero(inner) => eval(inner) == 0,  // T refined to Bool, inner: Expr<Int<32>>
         If(cond, then_expr, else_expr) => {
-            if eval!(cond) { eval!(then_expr) } else { eval!(else_expr) }
+            if eval(cond) { eval(then_expr) } else { eval(else_expr) }
         },
     }
 }
 ```
 
-In the `Lit` branch, the compiler learns `T == Int<32>` and therefore the return type `T` can be satisfied by returning an `Int<32>`. Similarly, in the `IsZero` branch, `T == Bool` is known, and the recursive call `eval!(inner)` returns `Int<32>`, allowing the comparison `== 0`. The `If` branch imposes no additional constraints, so `T` remains abstract.
+In the `Lit` branch, the compiler learns `T == Int<32>` and therefore the return type `T` can be satisfied by returning an `Int<32>`. Similarly, in the `IsZero` branch, `T == Bool` is known, and the recursive call `eval(inner)` returns `Int<32>`, allowing the comparison `== 0`. The `If` branch imposes no additional constraints, so `T` remains abstract.
 
 The refinement applies to the entire branch body, including any variable bindings from patterns. For instance, in `Lit(n)`, the variable `n` has type `Int<32>`, as declared, and the type parameter `T` of the whole `match` expression is locally unified with `Int<32>`. This unification is consistent with the fact that `e` in that branch must be of type `Expr<Int<32>>`.
 
@@ -548,11 +548,11 @@ type Expr<T> = enum {
 
 def eval<T>(e: Expr<T>) -> T {
     match e {
-        Lit(n) => n,
-        Neg(x) => -eval!(x),
-        Add(a, b) => eval!(a) + eval!(b),
-        Eq(a, b) => eval!(a) == eval!(b),
-        If(c, t, f) => if eval!(c) { eval!(t) } else { eval!(f) },
+        Lit(n) => return n,
+        Neg(x) => return -eval(x),
+        Add(a, b) => return eval(a) + eval(b),
+        Eq(a, b) => return eval(a) == eval(b),
+        If(c, t, f) => if eval(c) { return eval(t) } else { return eval(f) },
     }
 }
 ```
@@ -900,7 +900,7 @@ using the `for<...>` syntax:
 def apply_to_refs<F>(f: F, x: &Int<32>) -> &Int<32>
     where F: for<'a> Fn(&'a Int<32>) -> &'a Int<32>
 {
-    f(x)
+    return f(x);
 }
 ```
 
@@ -981,7 +981,7 @@ For non‑blocking operations, functions return `Future<T>`:
 ```posita
 async def fetch_data(url: &[Byte]) -> Result<Data, Error> { ... }
 def main() -> Result<(), Error> {
-    set data = await fetch_data("...")?;
+    set data = await fetch_data(b"...")?;
 }
 ```
 The `await` keyword marks a suspension point that must be visible to reviewers.
@@ -1305,6 +1305,7 @@ immutable variable with the same name in the *same* scope is also an error.
 def function_name(param1: Type1, param2: Type2) -> ReturnType { ... }
 ```
 Default parameter values: `def f(x: Int<32> = 0) { ... }`
+A function body must use an explicit `return` statement to produce its result; the final expression in a body is never implicitly returned.
 
 ### Return Value Semantics
 
@@ -1372,10 +1373,10 @@ Slice patterns allow destructuring of slices (`&[T]`) and arrays (`[T; N]`) with
 
 ```posita
 def sum(xs: &[Int<32>]) -> Int<32> {
-    match xs {
+    return match xs {
         [] => 0,
         [head, ..tail] => *head + sum(tail),
-    }
+    };
 }
 
 def is_palindrome(xs: &[Int<32>]) -> Bool {
@@ -1436,6 +1437,21 @@ scope_cleanup @name propagates {
 }
 ```
 
+**Conditional cleanup:** A `scope_cleanup` block may specify a compile‑time guard
+via the optional `when` clause:
+
+```posita
+scope_cleanup @name when condition {
+    // only executed when `condition` is true at the point of scope exit
+}
+```
+
+The `condition` must be a compile‑time predicate—it may reference only `ghost`
+variables and other compile‑time‑constant expressions. The compiler evaluates it
+at each exit point and omits the cleanup block on paths where the condition is
+`false`. This preserves the “erased at runtime” guarantee for ghost state while
+allowing conditional resource management without runtime overhead.
+
 - The block captures variables from the enclosing scope immutably or via `&mut` (subject to borrow rules). It is not a first‑class closure; it cannot escape the scope.
 - Multiple `scope_cleanup` blocks in the same scope execute in **LIFO** (last‑in, first‑out) order when the scope is exited.
 - An explicit `trigger @name;` statement executes the cleanup block immediately and removes it from the deferred list. It will not execute again at scope exit. `trigger` is a statement, not an expression.
@@ -1462,30 +1478,29 @@ scope_cleanup @flush_critical propagates overrides {
 }
 ```
 
-**Conditional cleanup with ghost variables:**
-
-`scope_cleanup` always runs at scope exit. To implement conditional cleanup (e.g., "only on failure"), use a ghost variable to encode the desired state. This is the recommended idiom:
+**Example — conditional rollback using `when`:**
 
 ```posita
 def process() -> Result<(), DbError> {
     let tx = db.begin()?;
-    ghost set mut needs_rollback = true;
+    ghost set mut committed = false;
 
-    scope_cleanup @rollback propagates {
-        if needs_rollback {
-            db.rollback()?;
-        }
+    scope_cleanup @rollback when not committed propagates {
+        db.rollback()?;
     }
 
     // ... business logic ...
     db.commit()?;
-    ghost set needs_rollback = false;
+    ghost set committed = true;
     Ok(())
-    // scope_cleanup runs, but rollback is skipped because needs_rollback is false
+    // scope_cleanup runs only if committed is still false
 }
 ```
 
-Because ghost variables are erased at runtime, this pattern has zero performance overhead and keeps the decision logic clearly associated with the cleanup block.
+Because `committed` is a ghost variable and the `when` clause is evaluated at
+compile time, the runtime code contains no dynamic branching for the cleanup
+guard. Paths where `committed == true` simply omit the `scope_cleanup` block
+entirely.
 
 **Asynchronous functions:**
 
@@ -1552,6 +1567,10 @@ Posita supports first‑class polymorphic values through the `poly` and `unbox` 
 
 - **`unbox(expr)`** — Unboxes a `Poly`-typed value by instantiating each of its quantifiers with a fresh type variable. The result is a monotype (or still‑polymorphic, depending on the body) that can be applied or used further. Calling `unbox` on the same `poly` value multiple times produces fresh instantiations each time.
 
+#### Let‑Generalization
+
+When the result of an `unbox` expression is bound by `set` or `let`, the compiler generalizes any remaining inference variables that are not constrained by the enclosing context. This allows the bound identifier to be used polymorphically at multiple types, exactly like a regular generic function. The underlying mechanism is Posita’s implementation of **let‑generalization** (from ML‑family languages), which ensures that a single `unbox` followed by a binding yields a fully polymorphic value without requiring repeated `unbox` calls.
+
 **Example — boxing and unboxing the identity function:**
 
 ```posita
@@ -1559,19 +1578,21 @@ def id<T>(x: T) -> T { return x; }
 
 def main() -> Int<32> {
     set p = poly(id);         // box id into a first-class polytype
-    set f = unbox(p);         // instantiate — f: ?T → ?T (fresh type variables)
-    return f(42);             // f is applied to Int<32>, yields Int<32>
+    set f = unbox(p);         // unbox → let-generalization makes f: ∀T. T → T
+    set x = f(42);            // instantiated for Int<32>
+    let _ = f(true);          // instantiated for Bool — same poly, different types
+    return x;
 }
 ```
 
-**Multiple instantiations from the same polytype:**
+**Multiple instantiations via let‑generalization:**
 
 ```posita
 def main() -> Int<32> {
     set p = poly(id);
-    set f = unbox(p);         // first instantiation
-    set x = f(42);            // instantiated for Int<32>
-    set y = f(true);          // instantiated for Bool — same poly, different types
+    set f = unbox(p);         // f is polymorphic
+    set x = f(42);            // uses Int<32>
+    set y = f(true);          // uses Bool
     return x;
 }
 ```
@@ -1582,7 +1603,7 @@ def main() -> Int<32> {
 def pair<T, U>(a: T, b: U) -> T { return a; }
 
 def main() -> Int<32> {
-    set f = unbox(poly(pair));  // f: ?T × ?U → ?T (two fresh vars)
+    set f = unbox(poly(pair));  // f: ∀T U. T × U → T (let‑generalized)
     return f(42, true);         // f(42, true): Int<32>
 }
 ```
@@ -1591,8 +1612,7 @@ def main() -> Int<32> {
 
 ```posita
 def main() -> Int<32> {
-    set f = unbox(poly(id));    // combined: box then immediately unbox
-    return f(42);
+    return unbox(poly(id))(42);
 }
 ```
 
@@ -1600,7 +1620,7 @@ def main() -> Int<32> {
 - `poly(42)` is rejected at compile time: `poly(...)` requires a polymorphic expression, but `42` is a concrete `Int<32>`.
 - `unbox(x)` where `x : Int<32>` is rejected: `unbox(...)` requires a polytype value; the compiler will report an error when the concrete non‑poly type is resolved.
 
-**Design note:** `poly`/`unbox` follow the same design as higher‑rank polymorphism in ML dialects (e.g., the `[∀α.τ]` boxed type in OmniML §3.1). The `Poly` type is covariant in its body and participates in unification with α‑conversion of quantifier indices. This enables type‑safe passing of polymorphic functions without requiring a separate `dyn`‑style vtable dispatch mechanism.
+**Design note:** `poly`/`unbox` follow the same design as higher‑rank polymorphism in ML dialects (e.g., the `[∀α.τ]` boxed type in OmniML §3.1). The `Poly` type is covariant in its body and participates in unification with α‑conversion of quantifier indices. Posita’s built‑in let‑generalization ensures that values obtained via `unbox` are fully polymorphic when bound, retaining the ergonomics of parametric polymorphism. This enables type‑safe passing of polymorphic functions without requiring a separate `dyn`‑style vtable dispatch mechanism.
 
 ---
 
@@ -1633,6 +1653,8 @@ When a function is annotated `@no_alloc_error`, the compiler verifies that every
 ### Handling Errors Locally with `catch`
 A `catch` expression has the type `T` where the preceding expression has type `Result<T, E>`. Each branch of `catch` must either diverge (via `leave with`, `panic`, etc.) or produce a value of type `T`. The patterns in `catch` branches are the enum variant names directly (e.g., `|IoError| { ... }`), not qualified paths, because the error type is already known from the expression.
 
+If the enclosing function does not return a `Result` whose error type can carry unmatched variants, a `catch` expression must be exhaustive over `E`, or must include a wildcard branch that produces a value of type `T`. Otherwise, any unmatched variant is implicitly propagated—equivalent to `leave with Err(unmatched_variant)`—which is only valid when the function returns a `Result<_, E>`.
+
 Example with divergence:
 ```posita
 def process() -> Result<(), ProcessError> {
@@ -1646,11 +1668,12 @@ def process() -> Result<(), ProcessError> {
 - **`as` binding**: Binds the error value to a local variable for inspection or logging.
 - **Arrow shorthand** (`=>`): When a branch body is a single expression (e.g., a return value), the `=>` syntax can replace curly braces for brevity.
 
-Example with a fallback value (non‑diverging):
+Example with a fallback value (non‑diverging, exhaustive):
 ```posita
 def fetch_or_default() -> Data {
     set data = fetch() catch {
         |NetworkError| { cached_default }
+        |_| { cached_default }   // catch‑all required because function does not return Result
     };
     return data;
 }
@@ -1670,7 +1693,7 @@ def process() -> Result<(), ProcessError> {
 
 The compiler verifies that `|_|` covers all remaining variants, and `capsa audit` flags wildcard branches for mandatory review, as they may silently absorb unexpected errors.
 
-**Non‑exhaustiveness**: Unlike `match`, `catch` does **not** require exhaustiveness. Any error variant that is not explicitly matched is **implicitly propagated**—equivalent to `leave with Err(unmatched_variant)`. This is the fundamental difference between `catch` and `match`: `catch` says "handle these specific errors here, let everything else pass through"; `match` says "handle all possibilities here and now."
+**Non‑exhaustiveness**: Unlike `match`, `catch` does **not** require exhaustiveness when the enclosing function returns a `Result`. Any error variant that is not explicitly matched is **implicitly propagated**—equivalent to `leave with Err(unmatched_variant)`. This is the fundamental difference between `catch` and `match`: `catch` says "handle these specific errors here, let everything else pass through"; `match` says "handle all possibilities here and now."
 
 This non‑exhaustive design works together with `@must_handle`: a library author can mark specific error variants as `@must_handle`, forcing callers to write a `catch` branch for those variants even if they use a wildcard for the rest.
 
@@ -1822,7 +1845,7 @@ def factorial(n: Int<32>) -> Int<32>
     ensures codomain > 0
     terminates n
 {
-    if n == 0 { 1 } else { n * factorial(n - 1) }
+    if n == 0 { return 1; } else { return n * factorial(n - 1); }
 }
 ```
 
@@ -1946,7 +1969,7 @@ extern "C" def puts(s: &[Byte]) -> Int<32>;
 
 @trusted
 def safe_puts(msg: &[Byte]) -> Result<(), AppError>
-    requires msg'len > 0 && msg[msg'len - 1] == 0
+    requires msg'len > 0 and msg[msg'len - 1] == 0
     ensures codomain == Ok(())
 {
     unsafe { puts(msg); }
@@ -1955,7 +1978,7 @@ def safe_puts(msg: &[Byte]) -> Result<(), AppError>
 
 type EmployeeId = UInt<16> with default = 0;
 type Salary = Int<32> with default = 0;
-type Age = exists n: UInt<8> invariant n >= 18 && n <= 120 with default = 25;
+type Age = exists n: UInt<8> invariant n >= 18 and n <= 120 with default = 25;
 type OwnedFileDescriptor = exists n: Int<32> invariant n >= 0 with no_default;
 
 type UniqueToken = struct { id: EmployeeId }
@@ -2051,7 +2074,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`), GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, and more.
 
 ---
 
@@ -2091,7 +2114,7 @@ A: `@linear` types forbid implicit discard, requiring explicit consumption via a
 A: Posita provides `@lemma` functions to supply auxiliary assertions that assist the SMT solver, and `@comptime_test` blocks to validate `@trusted` code against concrete inputs at compile time. For external formal proofs, `@link_proof` can reference Coq/ATS files that are distributed with the package and verified by `capsa`.
 
 **Q: What are ghost variables?**
-A: Ghost variables (`ghost set mut x = ...`) exist only at compile time and are erased from the final binary. They enable complex proofs without any runtime overhead.
+A: Ghost variables (`ghost set mut x = ...`) exist only at compile time and are erased from the final binary. They enable complex proofs without any runtime overhead. Ghost variables may appear in `when` guards of `scope_cleanup` blocks to conditionally control cleanup at compile time, but they never affect runtime control flow directly.
 
 **Q: What happens when data comes from an untrusted runtime source (e.g., a JSON file)?**
 A: Posita requires explicit parsing and validation at the boundary. Once the data is converted into a strongly‑typed struct, all subsequent code enjoys full static guarantees.
@@ -2256,10 +2279,10 @@ A: `@diverges` marks a function that never returns normally, even though its ret
 A: No. `leave with` is a distinct semantic construct that retains its identity throughout the compilation pipeline. Unlike operator desugaring (where `a + b` is rewritten into `Add::add(&a, &b)` in HIR), `leave with` remains as an `ErrorExit` terminator in the control‑flow graph. This distinction enables precise auditing (all error exit points are enumerable without pattern‑matching against `return`), contract verification (`ensures on Err` binds directly to `ErrorExit` nodes), and WCET analysis (error paths and success paths are analyzed separately).
 
 **Q: How does `scope_cleanup` differ from `defer` in other languages?**
-A: Unlike anonymous `defer`, Posita's `scope_cleanup` is a named, non‑escaping deferred block. It supports explicit early triggering via `trigger @name`, and its default error‑handling mode forbids `?` to prevent silent error injection. The `propagates` modifier must be explicitly used to allow error propagation, and `overrides` can be used to let cleanup errors take precedence over original errors. Early exits (`return`, `leave with`, etc.) are forbidden inside the block to preserve the LIFO execution guarantee. This design provides both flexibility for fallible cleanup and strong auditability through single‑point declaration.
+A: Unlike anonymous `defer`, Posita's `scope_cleanup` is a named, non‑escaping deferred block. It supports explicit early triggering via `trigger @name`, compile‑time conditional execution via `when`, and its default error‑handling mode forbids `?` to prevent silent error injection. The `propagates` modifier must be explicitly used to allow error propagation, and `overrides` can be used to let cleanup errors take precedence over original errors. Early exits (`return`, `leave with`, etc.) are forbidden inside the block to preserve the LIFO execution guarantee. This design provides both flexibility for fallible cleanup and strong auditability through single‑point declaration.
 
 **Q: How can I conditionally skip a `scope_cleanup` block (e.g., "only on failure")?**
-A: Use a ghost variable to track whether the cleanup is needed. Declare a `ghost set mut` flag before the `scope_cleanup`, check it inside the block, and update the flag after successful operations. Since ghost variables are erased at runtime, this has zero overhead. See the "Structured Resource Cleanup" section for an example.
+A: Use a ghost variable together with the `when` clause. Declare a ghost variable before the `scope_cleanup`, update it after successful operations, and reference it in the `when` condition. The compiler evaluates the condition at compile time and omits the cleanup block on paths where it is false. Because ghost variables are erased at runtime, this has zero overhead. See the "Structured Resource Cleanup" section for an example.
 
 **Q: How do I combine multiple error types into a reusable signature?**
 A: Use an enum set alias with the `|` operator in a `type` declaration. For example, `type AppError = IoError | DbError | ParseError;` creates a named combination that can be used in multiple function signatures. The compiler checks for variant name uniqueness across the combined enums and reports an error if any names conflict. See the "Enum Set Aliases" section for details.
@@ -2268,7 +2291,7 @@ A: Use an enum set alias with the `|` operator in a `type` declaration. For exam
 A: `@auto_deref` is an attribute placed on a `Deref` implementation that allows method‑call receivers to auto‑dereference through that implementation. Without it, wrapper types require explicit `(*x).method()` syntax. Use `@auto_deref` when your type is designed to be a transparent wrapper (e.g., `Rc<T>`, `Box<T>`). Omit it when the dereference should be explicit (e.g., opaque pointers, newtypes with semantic boundaries). Built‑in references (`&T` / `&mut T`) always auto‑dereference without requiring the attribute.
 
 **Q: How do I use `poly` and `unbox` for first‑class polymorphism?**
-A: `poly(expr)` boxes a polymorphic expression (like a generic function) into a `Poly` value. `unbox(poly_value)` instantiates that polytype with fresh type variables, yielding a monomorphic function that can be applied. This allows passing generic functions as values and instantiating them at multiple types. See the "First‑Class Polymorphism" section for examples.
+A: `poly(expr)` boxes a polymorphic expression (like a generic function) into a `Poly` value. `unbox(poly_value)` instantiates that polytype with fresh type variables. When the result is bound with `set` or `let`, Posita’s let‑generalization mechanism automatically generalizes the remaining type variables, making the bound identifier fully polymorphic (e.g., `∀T. T → T`). You can then apply it at multiple different types without additional `unbox` calls. See the "First‑Class Polymorphism" section for examples.
 
 **Q: Does Posita support GADTs?**
 A: Yes. Posita supports Generalized Algebraic Data Types (GADTs) where enum variants can carry type equality constraints using the `when` keyword. This enables type‑safe embedded DSLs and precise type refinement during pattern matching. See the "Generalized Algebraic Data Types" section for full details.
