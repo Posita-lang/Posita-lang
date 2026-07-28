@@ -1,5 +1,4 @@
-# Posita Language Syntax
-**Document revision: 2026-07-27** (working draft, not a frozen specification)
+**Document revision: 2026-07-28** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -898,6 +897,93 @@ When `Copy` is automatically derived (or manually implemented), the compiler als
 
 ### Associated Types and Projections
 Associated types are accessed via the `::` operator: `T::Output`. In `where` clauses they are used to constrain relationships between types.
+
+### Generic Associated Types (GAT)
+
+An associated type in a trait may itself be parameterized by compile‑time
+lifetimes or values. This enables the expression of **type constructors** at
+the trait level.
+
+#### Declaration
+
+```posita
+trait StreamingIterator {
+    type Item<'a> where Self: 'a;
+    def next<'a>(&'a mut self) -> Option<Self::Item<'a>>;
+}
+```
+
+- A GAT parameter list `<'a>` (lifetimes) or `<const N: usize>` (compile‑time
+  constants) follows the associated type name.
+- An optional `where` clause on the GAT constrains the relationship between the
+  trait's implementing type and the GAT's parameters. The constraint `Self: 'a`
+  is typical when the GAT borrows from `self`.
+- Multiple GAT parameters may appear, separated by commas, e.g.:
+  `type Map<'a, const N: usize> where Self: 'a;`
+
+#### Implementation
+
+```posita
+struct BytesStream { data: &[Byte], pos: usize }
+
+impl StreamingIterator for BytesStream {
+    type Item<'a> = &'a Byte where Self: 'a;
+    def next<'a>(&'a mut self) -> Option<&'a Byte> {
+        if self.pos < self.data'len {
+            let b = &self.data[self.pos];
+            self.pos += 1;
+            return Some(b);
+        } else {
+            return None;
+        }
+    }
+}
+```
+
+- Each GAT declared in the trait must be given a concrete type in every `impl`.
+- The concrete type may also be generic over the same (or fewer) parameters,
+  and must satisfy any `where` constraints declared in the trait.
+
+#### Interaction with HRTB
+
+GATs naturally combine with higher‑ranked trait bounds to express constraints
+that hold for all possible lifetimes:
+
+```posita
+def drain_all<I>(iter: I) -> Vector<I::Item<'_>>
+    where I: for<'a> StreamingIterator<Item<'a> = &'a Int<32>>
+{
+    // ...
+}
+```
+
+Here `for<'a>` quantifies over the GAT’s lifetime parameter, allowing the
+function to accept any `StreamingIterator` whose items are references.
+
+#### Compile‑time Value Parameters
+
+GATs may also be parameterized by compile‑time constants, using the same
+`const` syntax as regular generics:
+
+```posita
+trait FixedBuffer {
+    type Slice<const N: usize> where N <= Self::CAPACITY;
+    const CAPACITY: usize;
+}
+```
+
+This enables type‑level functions over sizes, e.g., returning a fixed‑size
+array type that depends on a const parameter.
+
+#### Restrictions
+
+- GAT parameters are **not** inferred from usage; they must be explicitly
+  provided at the use site (e.g., `Self::Item<'a>`).
+- A GAT cannot introduce new type parameters; only lifetime or const parameters
+  are permitted.
+- The `where` clause on a GAT may only constrain the relationship between the
+  implementing type and the GAT’s parameters; it cannot impose arbitrary trait
+  bounds on external types.
 
 ### Higher-Ranked Trait Bounds (HRTB)
 
@@ -2099,7 +2185,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), and more.
 
 ---
 
