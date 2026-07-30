@@ -528,6 +528,8 @@ pub def make_iter() -> MyIter {
 - Contracts on `MyIter` can only reference properties guaranteed by
   the trait (e.g., `codomain.count() == 10`).
 
+TAIT cannot be used in enum set aliases.
+
 #### Enum Set Aliases
 
 Posita supports combining existing enum types into a named alias using the `|` operator. This is particularly useful for error aggregation and state machine simplification.
@@ -546,6 +548,11 @@ def read_and_parse() -> Result<Data, IoOrParseError> {
 - **Variant uniqueness**: All variant names across the combined enums must be distinct. If two enums share a variant name (e.g., both define `Timeout`), the compiler reports an error. Disambiguation requires qualifying the variant name with its enum type (e.g., `IoError::Timeout` vs `NetError::Timeout`), which is permitted in `catch` and `match` patterns when the variant name is ambiguous, but not in type declarations.
 - **Transparency**: The alias is fully transparent to the type system. The compiler expands `IoOrParseError` to the full set of variants at compile time. `catch` branches, `@must_handle` annotations, and `match` expressions can reference individual variants by their original names without qualifying through the alias.
 - **Recursive sets**: An enum set alias may include other set aliases in its definition (e.g., `type AppError = IoOrParseError | DbError`). The compiler flattens the chain into a single variant set.
+- **No `impl Trait` or `dyn Trait` in set aliases**: The right‑hand side of
+  an enum set alias must consist solely of existing enum type names.  `impl
+  Trait` (TAIT) and `dyn Trait` are not permitted in set aliases, because
+  the variant set must be statically known at compile time for `catch`
+  pattern exhaustiveness and `@must_handle` resolution.
 
 #### Generalized Algebraic Data Types (GADTs)
 
@@ -1706,10 +1713,11 @@ scope_cleanup @name when condition {
 ```
 
 The `condition` must be a compile‑time predicate—it may reference only `ghost`
-variables and other compile‑time‑constant expressions. The compiler evaluates it
-at each exit point and omits the cleanup block on paths where the condition is
-`false`. This preserves the “erased at runtime” guarantee for ghost state while
-allowing conditional resource management without runtime overhead.
+variables, `const` generic parameters, and other compile‑time‑constant
+expressions. The compiler evaluates it at each exit point and omits the
+cleanup block on paths where the condition is `false`. This preserves the
+“erased at runtime” guarantee for ghost state while allowing conditional
+resource management without runtime overhead.
 
 - The block captures variables from the enclosing scope immutably or via `&mut` (subject to borrow rules). It is not a first‑class closure; it cannot escape the scope.
 - Multiple `scope_cleanup` blocks in the same scope execute in **LIFO** (last‑in, first‑out) order when the scope is exited.
@@ -1817,6 +1825,19 @@ value as Int<32> floor   // floor
 | 11 (lowest) | `..`, `..=` | left‑to‑right |
 
 **`as!` layout compatibility**: The compiler verifies that the source and target types have the same size and alignment via `layout_of!`, or, in the case of truncation, that the truncated value does not violate the target type's `invariant`. All uses of `as!` are flagged by `capsa audit` for mandatory human review.
+
+- **Alignment compatibility**: The compiler also verifies that the target
+  type's alignment is not stricter than the source type's alignment, unless
+  the source is a raw pointer (`*T` or `Ptr<...>`) and the entire cast
+  plus the subsequent dereference are contained within an `unsafe` block.
+  In `unsafe` blocks, the programmer assumes full responsibility for
+  ensuring that the resulting pointer is correctly aligned for its type;
+  violation may result in undefined behavior (including hardware faults on
+  architectures that trap on misaligned access).
+
+  For safe code that must read or write misaligned data, the standard
+  library provides `from_unaligned` / `write_unaligned` functions that
+  perform byte‑wise copies without alignment requirements.
 
 ### Move Semantics
 The `move` keyword explicitly transfers ownership of a non‑`Copy` value. It may be used in:
@@ -2220,7 +2241,7 @@ Developers select the level via `capsa build --diagnostic-level=N`. When a contr
 | **Data races** | `&mut T` is exclusive, `&T` is shared; compile‑time borrow rules. |
 | **Buffer overflow** | Array access checked via contract or runtime bounds; pointer arithmetic constrained to explicit `Ptr` types. |
 | **Invalid enum values** | Type invariants. |
-| **Misaligned pointers** | `Ptr` type carries alignment; safe casts check alignment; `as!` demands proof of alignment. |
+| **Misaligned pointers** | `Ptr` type carries alignment; safe casts check alignment; `as!` demands proof of alignment. In `unsafe` blocks, alignment is the programmer's responsibility. The standard library provides `from_unaligned`/`write_unaligned` for safe misaligned access. |
 | **Type punning / transmute** | `as!` requires compile‑time verification of layout compatibility. |
 | **Non‑terminating loops** | `decreases` clause on loops proves strict decrease of a non‑negative measure. |
 | **Non‑terminating recursion** | `terminates` clause on functions proves strict decrease of the argument. |
@@ -2500,7 +2521,7 @@ A: By default, `ensures` applies to all exit paths. You can specialize with `ens
 A: The compiler provides three diagnostic levels (L1: locate, L2: explain with counterexamples, L3: full SMT‑LIB dump). Use `capsa build --diagnostic-level=N` to select the depth of information.
 
 **Q: When is `as!` safe to use?**
-A: The compiler verifies that source and target types have the same size and alignment, or that a truncation does not violate the target type's `invariant`. All uses of `as!` are flagged for human review by `capsa audit`.
+A: The compiler verifies that source and target types have the same size and alignment, or that a truncation does not violate the target type's `invariant`. All uses of `as!` are flagged for human review by `capsa audit`. For alignment‑unsafe casts involving raw pointers, the operation must be placed in an `unsafe` block.
 
 **Q: How is audit logging handled?**
 A: Functions marked `@audit_log` must write contract violations to an immutable audit log. The storage backend is provided by the standard library; tamper‑evident mechanisms (e.g., hash chains) are strongly recommended.
@@ -2582,3 +2603,9 @@ A: All non‑`Copy` types are affine: they can be moved or discarded, but not du
 
 **Q: How do I pass a `&mut T` to a function expecting `&T`?**  
 A: Use `&ro r` to explicitly create a read‑only reference, or apply `@auto_ro` to the enclosing function or module. In method chains, prefer `.freeze!()`. See the "Reference Coercion and Read-Only Borrows" section for details.
+
+**Q: Can I use `impl Trait` or `dyn Trait` in an enum set alias?**
+A: No. Enum set aliases (`A | B`) must be composed from concrete enum type names so that the variant set is statically known. `impl Trait` and `dyn Trait` are rejected in this context.
+
+**Q: How does `as!` handle alignment mismatches?**
+A: The compiler rejects `as!` if the target alignment is stricter than the source and the compiler cannot prove the pointer is correctly aligned. If the source is a raw pointer, the entire operation can be placed inside an `unsafe` block, where the programmer assumes responsibility for alignment. Safe alternatives like `from_unaligned` are available for misaligned data.
