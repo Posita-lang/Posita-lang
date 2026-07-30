@@ -1,4 +1,4 @@
-**Document revision: 2026-07-28** (working draft, not a frozen specification)
+**Document revision: 2026-07-30** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -26,7 +26,7 @@ Posita is a **ultra‑static, systems programming language** where the programme
 `linear`, `consume` are planned keywords; `by` is reserved for closure capture syntax.
 
 ### Identifiers
-`[a‑zA‑Z_][a‑zA‑Z0‑9_]*`
+`[a‑zA-Z_][a‑zA-Z0-9_]*`
 
 ### Literals
 - Integers: `42`, `0xFF`, `0b1010`
@@ -300,6 +300,117 @@ Bounds checking is **never** performed for pointer arithmetic. Use array types (
 
 References (`&T`, `&mut T`) and pointers (`*T`, `Ptr<pointee = T>`) require `T` to have a bit‑width of at least 8. Types narrower than one byte (e.g., `Int<3>`, `UInt<4>`) are value‑only types and cannot be the target of a reference or pointer. Bit‑fields in `@packed` structs are accessed through the enclosing struct, not by direct reference.
 
+### Reference Coercion and Read-Only Borrows
+
+By default, Posita does **not** allow a `&mut T` to be implicitly coerced
+to `&T`.  An explicit syntax is required to make the loss of mutability
+visible to reviewers.
+
+#### Explicit Read-Only Borrow: `&ro`
+
+The `&ro` operator creates a read‑only (immutable) reference from a mutable
+one:
+
+```posita
+def takes_shared(x: &Int<32>) -> Int<32> {
+    return *x;
+}
+
+def main() -> Int<32> {
+    set mut val = 42;
+    let r: &mut Int<32> = &mut val;
+
+    // Explicitly freeze the mutable reference to obtain an immutable one
+    let result = takes_shared(&ro r);
+    return result;
+}
+```
+
+- `&ro r` is a compile‑time operation; it produces a `&T` from a `&mut T`
+  with zero runtime overhead.
+- During the lifetime of the `&ro` borrow, the original mutable reference
+  (`r`) is frozen and cannot be used for mutation.
+- `&ro` is not a keyword; `ro` only has special meaning when immediately
+  following `&` in a borrow expression.
+
+In iterator chains and other fluent interfaces, `&ro` makes the transition
+from mutable to read‑only iteration explicit:
+
+```posita
+def process_vec(v: &mut Vector<Int<32>>) -> Vector<Int<32>> {
+    return v.iter_mut()
+            .map(|x| *x * 2)        // operates on &mut Int<32>
+            .collect();
+}
+```
+
+If a subsequent adapter requires a read‑only view, the compiler will raise
+an error asking for an explicit `&ro`:
+
+```posita
+def process_and_filter(v: &mut Vector<Int<32>>) -> Vector<Int<32>> {
+    return v.iter_mut()
+            .filter(|x| **x > 0)    // Error: cannot pass &mut T where &T is expected
+            .map(|x| *x * 2)
+            .collect();
+}
+```
+
+The error can be resolved by inserting `.freeze!()` (the standard‑library
+equivalent of `&ro`) at the point where mutability is surrendered:
+
+```posita
+def process_and_filter(v: &mut Vector<Int<32>>) -> Vector<Int<32>> {
+    return v.iter_mut()
+            .freeze!()              // explicit transition to read‑only view
+            .filter(|x| *x > 0)
+            .map(|x| *x * 2)
+            .collect();
+}
+```
+
+> **Note:** The method `.freeze!()` is a convenience wrapper around `&ro`
+> that behaves identically and is preferred in method chains.  Both forms
+> are compiler‑recognised and have zero runtime cost.
+
+#### Local Relaxation: `@auto_ro` and `@auto_coerce`
+
+For modules or functions where the explicitness of `&ro` becomes a
+productivity burden, Posita provides opt‑in attributes that restore
+implicit coercion within a limited scope.
+
+- **`@auto_ro`** – Allows `&mut T` to be implicitly coerced to `&T`
+  at function call sites and method resolution.  It is the narrowest
+  relaxation and only affects read‑only reborrows.
+
+  ```posita
+  @auto_ro
+  def flexible_function(r: &mut Int<32>) -> Int<32> {
+      // No &ro required; implicit coercion is enabled
+      return takes_shared(r);
+  }
+  ```
+
+- **`@auto_coerce`** – Enables all safe implicit coercions, including
+  `&mut T` → `&T`, deref coercions (e.g. `&Rc<T>` → `&T`), and any
+  other sound coercions that may be introduced in the future.  This
+  attribute is intended for whole‑module use in prototyping or
+  non‑safety‑critical code.
+
+  ```posita
+  @auto_coerce
+  mod internal_utils {
+      pub def helper(r: &mut Int<32>) -> Int<32> {
+          return takes_shared(r); // implicit coercion works
+      }
+  }
+  ```
+
+- Both attributes can be applied to individual functions, modules, or
+  (via `@auto_coerce`) entire files.  They are **not** permitted inside
+  `@trusted` functions or in Strict Mode, where all permissions must
+  remain explicit.
+
 ### Explicit Lifetime Parameters
 When the compiler cannot infer lifetimes, you may annotate them explicitly:
 ```posita
@@ -459,11 +570,14 @@ Here, `Lit` is only a valid variant of `Expr<Int<32>>`, `IsZero` only of `Expr<B
 A GADT variant is declared like a regular enum variant, optionally followed by the keyword `when` and a compile‑time boolean expression. The expression may reference the enum’s type parameters and may use equality constraints (`==`) with concrete types.
 
 ```
-enum_variant ::= variant_name ( types? ) [ when constraint_expr ]
+enum_variant ::= variant_name ( [ exists_var_decl ] field_type (, field_type)* )? [ when constraint_expr ]
+exists_var_decl ::= 'exists' ident (, ident)* ':'
 constraint_expr ::= boolean_expression   // must be evaluable at compile time
 ```
 
-Currently, only equality constraints of the form `T == ConcreteType` are supported, where `T` is a type parameter of the enum and `ConcreteType` is a fully known type. Multiple constraints can be combined with `and`:
+The `exists` clause introduces existentially quantified type variables scoped over the variant’s fields and `when` constraint.
+
+Currently, equality constraints of the form `T == ConcreteType` are supported, where `ConcreteType` may be a fully known type or may involve existentially quantified variables (e.g., `when T == [X]` where `X` is declared by `exists X`). Multiple constraints can be combined with `and`.
 
 ```posita
 type KeyValue<K, V> = enum {
@@ -479,6 +593,22 @@ The `when` clause is part of the variant’s “header” and must appear after 
 - A variant with a `when` clause is only considered a valid constructor for instances of the enum where the type arguments satisfy the constraint. For example, `Expr::Lit` can only produce values of type `Expr<Int<32>>`.
 - The compiler verifies at every construction site that the inferred or explicitly given type arguments satisfy the variant’s constraints. Violation results in a compile‑time error.
 - Constraints are resolved purely at compile time and do not produce runtime checks. They are completely erased from the generated code.
+
+##### Existential Quantification
+
+Variants may declare existentially quantified type variables using `exists X` in the field list. These variables represent hidden types that are not exposed in the enum’s type parameters but are constrained by the `when` clause.
+
+```posita
+type DynExpr<T> = enum {
+    IntLit(Int<32>) when T == Int<32>,
+    Slice(exists X: &[X]) when T == [X],
+    Pair(exists A, B: (A, B)) when T == (A, B),
+}
+```
+
+- For `Slice(exists X: &[X]) when T == [X]`: there exists some type `X` such that the variant holds a `&[X]` and `T == [X]`.
+- When matching an existentially quantified variant, the compiler introduces fresh, abstract type variables for each `exists` parameter. These variables are kept distinct and cannot be unified with anything outside the branch. The branch body can use them, but they remain opaque except as dictated by the `when` constraint (e.g., from `T == [X]` we know the outer type `T` is a slice of some element type, but we cannot assume anything else about `X`).
+- The existentially quantified variables are scoped to the match arm and are prevented from leaking into the surrounding context by an occurs‑check at the branch boundary.
 
 ##### Pattern Matching and Type Refinement
 
@@ -501,6 +631,8 @@ In the `Lit` branch, the compiler learns `T == Int<32>` and therefore the return
 The refinement applies to the entire branch body, including any variable bindings from patterns. For instance, in `Lit(n)`, the variable `n` has type `Int<32>`, as declared, and the type parameter `T` of the whole `match` expression is locally unified with `Int<32>`. This unification is consistent with the fact that `e` in that branch must be of type `Expr<Int<32>>`.
 
 Refinement is also available in `if let` and `while let` expressions. For GADT enums, the compiler infers the same type equalities within the guarded block.
+
+For existentially quantified variants, the compiler introduces fresh type variables for the existential parameters and records the equalities from the `when` clause. These fresh variables are available in the branch but are prevented from escaping.
 
 ##### Exhaustiveness Checking
 
@@ -530,7 +662,13 @@ Constructors of GADT variants are subject to the same type‑checking and contra
 
 ##### Limitations and Future Directions
 
-- Only type equality constraints (`T == ConcreteType`) are supported in the initial implementation. Constraints such as `T: SomeTrait` or `T != U` are not yet allowed.
+- Equality constraints of the form `T == Type` are supported, where `Type`
+  may be a concrete type (e.g., `Int<32>`, `[Byte]`) or a type involving
+  existentially quantified variables introduced with `exists` inside the
+  variant (e.g., `when T == [X]` where `X` is declared as `exists X`).
+  Constraints involving type parameters from the enum header on the
+  right‑hand side (e.g., `T == [U]` where `U` is another enum type
+  parameter) are not yet allowed.
 - The constraint expressions are evaluated at compile time and cannot depend on runtime values.
 - GADT constraints do not interact with the SMT solver used for contract verification; they are entirely a type‑system feature.
 - Default values for generic GADT enums are currently prohibited; a future version may allow default values for specific monomorphic instances using a syntax like `default for Expr<Bool> = ...` (planned).
@@ -560,6 +698,27 @@ def eval<T>(e: Expr<T>) -> T {
 ```
 
 This demonstrates how GADTs eliminate the possibility of constructing ill‑typed ASTs and enable safe evaluation without runtime type checks.
+
+**Existential GADT example:**
+
+```posita
+type DynExpr<T> = enum {
+    IntLit(Int<32>) when T == Int<32>,
+    Slice(exists X: &[X]) when T == [X],
+    Pair(exists A, B: (A, B)) when T == (A, B),
+}
+
+def slice_length<T>(e: DynExpr<T>) -> usize
+    requires T == [X] for some X   // conceptual requirement
+{
+    match e {
+        Slice(s) => return s'len,   // s: &[X], length available
+        _ => panic("not a slice"),
+    }
+}
+```
+
+In the `Slice` branch, the compiler knows `T == [X]` for the existential `X`, and `s` has type `&[X]`. The length operation is valid, and `X` remains abstract but does not need to be known further.
 
 ### Layout Control Attributes
 Fine‑grained control for hardware registers and protocols:
@@ -650,6 +809,8 @@ The following attributes are not layout‑specific but affect language semantics
 | `@inline` | Function | Forces inlining at call sites; compile error if not possible |
 | `@noinline` | Function | Prevents inlining of the function |
 | `@auto_deref` | impl Deref | Allows method‑call receiver auto‑dereferencing for this `Deref` implementation. Without this attribute, a `Deref` impl requires explicit `(*x).method()` syntax for method calls through the wrapper type. `&T` / `&mut T` are exempt and always auto‑dereference. |
+| `@auto_coerce` | Function, Module, File | Enables all safe implicit coercions within the annotated scope, including `&mut T` → `&T` and deref coercions. Not permitted in `@trusted` functions or Strict Mode. |
+| `@auto_ro` | Function, Module | Allows implicit `&mut T` → `&T` coercion within the annotated scope. Not permitted in `@trusted` functions or Strict Mode. |
 | `@must_use` | Function, Type | Compiler warns if the return value is silently discarded. `Result` and `Option` are implicitly `@must_use`. |
 | `@must_handle(Variant1, ...)` | Function (returning `Result`) | Compiler warns if the caller does not explicitly match or catch the listed error variants. Variant names are resolved against the error type `E` of `Result<_, E>`. If a variant name is ambiguous in the current scope, the compiler emits an error and requires explicit qualification using `EnumName::Variant`. |
 | `@tailrec` | Function | Verifies that all recursive calls are in tail position and enforces tail‑call optimization; compile error if not possible |
@@ -2185,7 +2346,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), and more.
 
 ---
 
@@ -2405,7 +2566,7 @@ A: `@auto_deref` is an attribute placed on a `Deref` implementation that allows 
 A: `poly(expr)` boxes a polymorphic expression (like a generic function) into a `Poly` value. `unbox(poly_value)` instantiates that polytype with fresh type variables. When the result is bound with `set` or `let`, Posita’s let‑generalization mechanism automatically generalizes the remaining type variables, making the bound identifier fully polymorphic (e.g., `∀T. T → T`). You can then apply it at multiple different types without additional `unbox` calls. See the "First‑Class Polymorphism" section for examples.
 
 **Q: Does Posita support GADTs?**
-A: Yes. Posita supports Generalized Algebraic Data Types (GADTs) where enum variants can carry type equality constraints using the `when` keyword. This enables type‑safe embedded DSLs and precise type refinement during pattern matching. See the "Generalized Algebraic Data Types" section for full details.
+A: Yes. Posita supports Generalized Algebraic Data Types (GADTs) where enum variants can carry type equality constraints using the `when` keyword, including existentially quantified type variables introduced with `exists`. This enables type‑safe embedded DSLs and precise type refinement during pattern matching. See the "Generalized Algebraic Data Types" section for full details.
 
 **Q: How do GADTs interact with `with default`?**
 A: For generic enums whose variants have `when` constraints involving the type parameters, `with default` is prohibited. For non‑generic enums, `when` constraints using only global constants are allowed. See the GADT section for more.
@@ -2418,3 +2579,6 @@ A: Use **path labels**. Attach `@label` to a `return` statement (e.g., `return @
 
 **Q: What are affine and linear types in Posita?**
 A: All non‑`Copy` types are affine: they can be moved or discarded, but not duplicated. `@linear` types are a stricter subset that also forbid implicit discarding—they must be explicitly consumed (e.g., by passing to a consumer function or calling `forget`). This provides fine‑grained control over resources that must never be silently dropped. See the "Affine and Linear Types" section for details.
+
+**Q: How do I pass a `&mut T` to a function expecting `&T`?**  
+A: Use `&ro r` to explicitly create a read‑only reference, or apply `@auto_ro` to the enclosing function or module. In method chains, prefer `.freeze!()`. See the "Reference Coercion and Read-Only Borrows" section for details.
