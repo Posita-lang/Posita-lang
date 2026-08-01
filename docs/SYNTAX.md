@@ -1,4 +1,4 @@
-**Document revision: 2026-07-30** (working draft, not a frozen specification)
+**Document revision: 2026-08-01** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -157,6 +157,65 @@ If a linear value could leave a scope without being moved or explicitly forgotte
 Linear types are intended for protocol tokens, hardware descriptors, or any resource where an untracked disappearance would violate safety or audit requirements. All existing ownership and borrowing rules apply unchanged.
 
 > **Note:** `@linear` is a type‑level property, not a parameter qualifier. It only affects implicit discard. If you need to temporarily treat a normal affine value as linear (e.g., require explicit consumption in a critical function), use the `linear` keyword on a function parameter or a local block (planned for a future release).
+
+### Graded Binder Annotations
+
+Parameters may carry usage annotations specifying how many times they are
+consumed within the function body, following the framework of Graded Modal
+Dependent Type Theory (GrTT).
+
+| Annotation | Meaning |
+|---|---|
+| `@consume(N)` | The parameter is used exactly N times in the function body. |
+
+- `N` must be a compile-time constant expression (literal, `const` generic
+  parameter, or `comptime` function result).
+- The compiler verifies that the actual usage of the parameter matches the
+  declared grade. This is a binder-level check, not a function-level effect.
+- `@consume(N)` is independent of `@linear`. A `@linear` type enforces
+  "cannot be silently discarded"; `@consume(N)` on a parameter enforces
+  "used exactly N times in this function."
+- Usage constraints across function boundaries are expressed via contracts
+  (`requires`/`ensures`), not by the compiler implicitly tracking a
+  consumption counter.
+
+**Example:**
+
+```posita
+@linear
+type Token = struct { _id: UInt<32> };
+
+type TokenBucket<const N: usize> = struct {
+    tokens: [Token; N],
+    next: usize,
+};
+
+impl<const N: usize> TokenBucket<N> {
+    @consume(1)
+    def take(&mut self) -> Result<Token, BucketEmpty>
+        requires self.next < N        // contract: bucket still has tokens
+        ensures self.next == old(self.next) + 1
+    {
+        if self.next >= N {
+            leave with BucketEmpty;
+        }
+        let t = self.tokens[self.next];
+        self.next += 1;
+        return Ok(t);
+    }
+}
+
+// @consume on ordinary function parameters
+def compare(@consume(1) a: &Data, @consume(1) b: &Data) -> Bool {
+    return a.hash() == b.hash();
+}
+```
+
+The first example shows `@consume(1)` on a method parameter coexisting with
+contracts—the contract constrains the bucket's internal state, while
+`@consume(1)` constrains how many times the `self` parameter is used within
+the body. The second example shows the same annotation on ordinary function
+parameters without any `@linear` type involved.
 
 ### Const Generics (Compile‑Time Value Parameters)
 
@@ -641,6 +700,69 @@ Refinement is also available in `if let` and `while let` expressions. For GADT e
 
 For existentially quantified variants, the compiler introduces fresh type variables for the existential parameters and records the equalities from the `when` clause. These fresh variables are available in the branch but are prevented from escaping.
 
+#### Nested GADT Refinement
+
+Type refinements introduced by a GADT pattern are propagated throughout the
+branch body, including into nested patterns. The compiler maintains an
+equality context during pattern traversal using the following deterministic
+rules:
+
+1. **Constructor patterns** automatically introduce all equalities from
+   the constructor's `when` clause into the current context.
+2. **Equalities propagate inward** to sub‑patterns, constraining their
+   type parameters.
+3. **Equalities propagate outward** to the branch body, refining return
+   types and variable bindings.
+4. **Conflicting equalities** (e.g., an outer context requires
+   `T == Int<32>` but an inner constructor requires `T == Bool`) are
+   compile‑time errors, not silently ignored.
+5. **Wildcards (`_`) and variable bindings** do not generate new
+   equalities, but are constrained by the existing context.
+6. **Or‑patterns (`|`)** refine the context only when **all** alternatives
+   produce identical equalities for every constrained type parameter:
+
+   - **Consistent constraints** (e.g., `Lit(_) | Neg(_)` both require
+     `T == Int<32>`) — the equality propagates into the branch body.
+   - **Conflicting constraints** (e.g., `Add(_, _) | Eq(_, _)` where
+     `Add` requires `T == Int<32>` and `Eq` requires `T == Bool`) —
+     a compile‑time error is raised.
+   - **Partial constraints** (e.g., `Lit(_) | If(_, _, _)` where `Lit`
+     requires `T == Int<32>` but `If` imposes no constraint on `T`) —
+     **no refinement is propagated**; `T` remains abstract in the
+     branch body.
+
+   This conservative rule ensures that the type of every expression in
+   an OR‑pattern branch is statically known without relying on implicit
+   priority between alternatives. Variable bindings within OR‑patterns
+   are still subject to the usual compatibility check, which will
+   naturally reject incompatible payload types.
+
+These rules are purely mechanical—the compiler performs deterministic
+equality propagation without constraint solving, backtracking, or
+implicit derivation.
+
+**Example:**
+
+```posita
+type Expr<T> = enum {
+    Lit(Int<32>) when T == Int<32>,
+    Neg(Expr<Int<32>>) when T == Int<32>,
+    Add(Expr<Int<32>>, Expr<Int<32>>) when T == Int<32>,
+    Eq(Expr<Int<32>>, Expr<Int<32>>) when T == Bool,
+    If(Expr<Bool>, Expr<T>, Expr<T>),
+}
+
+def eval<T>(e: Expr<T>) -> T {
+    return match e {
+        Lit(n) => n,
+        Neg(x) => -eval(x),
+        Add(Lit(a), Lit(b)) => a + b,   // nested refinement works
+        Eq(x, y) => eval(x) == eval(y),
+        If(c, t, f) => if eval(c) { return eval(t) } else { return eval(f) },
+    }
+}
+```
+
 ##### Exhaustiveness Checking
 
 GADT constraints interact with exhaustiveness checking. If a particular variant is impossible for a given instantiation of the enum’s type parameters, the compiler may omit it from exhaustiveness requirements.
@@ -944,6 +1066,43 @@ Functions may be annotated with fine‑grained effect markers to describe their 
 - **`@io(read)`**: The function may perform input operations (reading files, network, etc.).
 - **`@io(write)`**: The function may perform output operations.
 - **`@io(read, write)`** or simply **`@io`**: The function may perform any I/O.
+
+**I/O effect aliases**: Projects can define named I/O effect aliases to
+group related resource tags, following the same pattern as `layout` aliases:
+
+```posita
+io FileIO {
+    read: file;
+    write: file;
+}
+
+io NetIO {
+    read: net;
+    write: net;
+}
+
+io ConsoleIO {
+    write: console;
+}
+
+// Usage: combine aliases with commas (union semantics)
+@io(FileIO, ConsoleIO)
+def log_to_console(msg: &Str) { ... }
+
+// The underlying tag syntax is also available for inline use:
+@io(read: file | net, write: console)
+def fetch_and_display() { ... }
+```
+
+- An `io` alias block lists `read` and/or `write` directions, each followed
+  by a semicolon-separated list of resource tags.
+- Aliases are combined with commas in `@io(...)` annotations, producing the
+  union of their effects. This is consistent with `@io(read, write)` syntax
+  for combining directions.
+- The inline tag syntax (`read: file | net`) is syntactic sugar for an
+  anonymous alias and is fully equivalent.
+- Unqualified `@io(read)` remains valid and grants access to all I/O sources.
+
 - **`@alloc`**: The function may perform dynamic memory allocation. May coexist with `@no_alloc_error`.
 - **`@no_alloc`**: The function guarantees no dynamic allocation. This implies `@no_alloc_error`.
 - **`@no_alloc_error`**: The function guarantees no allocation on any error path. All `From` conversions reachable via `?` in error paths must also be `@no_alloc`. May coexist with `@alloc`.
@@ -1287,6 +1446,24 @@ All symbols are **private by default**. Use `pub` to export.
 
 ### Package Layout
 Project defined by `posita.toml`. Compiler resolves full dependency graph.
+
+### Audit Rules
+
+Projects may declare module‑level effect restrictions in `posita.toml`
+under the `[audit.rules]` section:
+
+```toml
+[audit.rules]
+deny_effects = ["io:net", "io:serial"]
+```
+
+Each entry in `deny_effects` is an effect tag.  If any function in the
+module (transitively) exhibits a denied effect, compilation fails with
+a diagnostic identifying the function and the prohibited effect.
+
+This mechanism enforces security and safety boundaries at the module
+level, ensuring that critical code cannot accidentally perform
+restricted I/O.
 
 ---
 
@@ -2367,7 +2544,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), nested GADT refinement rules, graded binder annotations, I/O effect aliases, audit rules, and more.
 
 ---
 
