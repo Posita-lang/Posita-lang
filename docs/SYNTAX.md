@@ -1,4 +1,5 @@
-**Document revision: 2026-08-01** (working draft, not a frozen specification)
+# Posita Language Syntax
+**Document revision: 2026-08-08** (working draft, not a frozen specification)
 
 > [!NOTE]
 > This document version tracks its own edits. It does **not** correspond to a language specification release.
@@ -20,7 +21,7 @@ Posita is a **ultra‑static, systems programming language** where the programme
 `def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`,
 `comptime`, `import`, `as`, `true`, `false`, `auto`, `and`, `or`, `not`, `sizeof`, `alignof`,
 `catch`, `panic`, `unsafe`, `let`, `finally`,
-`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`, `const`, `forall`
+`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`, `const`, `forall`
 
 `Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words.  
 `linear`, `consume` are planned keywords; `by` is reserved for closure capture syntax.
@@ -320,6 +321,38 @@ For signed division, `MIN / -1` (where `MIN` is the most negative value of the t
 
 The compiler uses range analysis and type invariants to statically eliminate overflow checks where possible.
 
+Floating-point overflow is never undefined. The default overflow policy
+is `trap` (compile-time error in strict mode, runtime panic otherwise).
+In strict mode, the `trap` policy cannot be overridden; in non-strict
+mode, programmers can override at the type or operator level.
+
+Type-level override:
+```posita
+type IEEE = Float<64> with overflow = ieee;     // IEEE 754 (→ ±∞, NaN, ±∞)
+type Safe = Float<64> with overflow = trap;     // trap (default)
+type SatF = Float<32> with overflow = saturate; // saturation (clamp to range)
+```
+
+Operator-level override (same suffixes as integer overflow):
+- `+%`, `-%`, `*%` : IEEE 754 semantics
+- `+?`, `-?`, `*?` : saturate
+- `+!`, `-!`, `*!` : trap (compile-time check for constant expressions;
+  runtime panic for IEEE anomalies)
+
+Division (`/`) and remainder (`%`) do not accept overflow suffixes; the
+overflow policy of the operand type applies.
+
+For compile-time constant floating-point expressions, the compiler
+evaluates the operation using IEEE 754 semantics on the host FPU and
+checks the exception flags (FE_OVERFLOW, FE_INVALID, FE_DIVBYZERO).
+If any flag is set, a compile-time error is raised.
+
+The `@ieee_contracts` attribute controls the interpretation of floating‑point
+operations in contracts (`requires`/`ensures`), switching them from the
+default mathematical real domain to IEEE 754 semantics.  It is orthogonal
+to the `overflow` policy: `@ieee_contracts` affects SMT solver reasoning,
+while `overflow` affects runtime behavior and `comptime` evaluation.
+
 ### Pointers and References
 - Raw pointer type: `Ptr<size = SizeType, pointee = PointeeType>`
   - `size`: type that determines the pointer's own width (e.g., `UInt<16>`).
@@ -392,6 +425,16 @@ def main() -> Int<32> {
 - `&ro` is not a keyword; `ro` only has special meaning when immediately
   following `&` in a borrow expression.
 
+The borrow checker enforces the following semantics for `&ro`:
+- **Point‑level liveness** (Q1‑B, committee 2026‑08‑05): the freeze lasts
+  until the borrow variable's **last use** — at statement granularity.
+  After the last use (even in the same block), the source becomes readable
+  and writable again.  An unused borrow does not freeze at all.
+- **Temporary views** (a non‑bound `&ro` / `.freeze!()` — no borrow
+  variable): the freeze lasts only for the **enclosing expression** — the
+  temporary's "last use" is its own expression, so the source becomes
+  writable again at the next statement.
+
 In iterator chains and other fluent interfaces, `&ro` makes the transition
 from mutable to read‑only iteration explicit:
 
@@ -439,8 +482,9 @@ productivity burden, Posita provides opt‑in attributes that restore
 implicit coercion within a limited scope.
 
 - **`@auto_ro`** – Allows `&mut T` to be implicitly coerced to `&T`
-  at function call sites and method resolution.  It is the narrowest
-  relaxation and only affects read‑only reborrows.
+  within the annotated function or module.  Implicit coercions do **not**
+  freeze the source variable.  Code requiring freeze guarantees should
+  use `&ro` explicitly.  Not permitted in `@trusted` or Strict Mode.
 
   ```posita
   @auto_ro
@@ -450,11 +494,17 @@ implicit coercion within a limited scope.
   }
   ```
 
-- **`@auto_coerce`** – Enables all safe implicit coercions, including
-  `&mut T` → `&T`, deref coercions (e.g. `&Rc<T>` → `&T`), and any
-  other sound coercions that may be introduced in the future.  This
-  attribute is intended for whole‑module use in prototyping or
-  non‑safety‑critical code.
+Under the borrow checker, `@auto_ro` implicit coercions register a
+temporary read-only loan scoped to the call expression.  The source
+variable is frozen during the call (not readable, not writable) and
+restored to its original borrow state after the call returns.  This
+is narrower than the explicit `&ro` freeze (which lasts until the
+borrow's last use).
+
+- **`@auto_coerce`** – Enables all safe implicit coercions within the
+  annotated scope (function, module, or file), including `&mut T` → `&T`
+  and deref coercions (e.g. `&Rc<T>` → `&T`).  Not permitted in
+  `@trusted` functions or Strict Mode.
 
   ```posita
   @auto_coerce
@@ -464,11 +514,6 @@ implicit coercion within a limited scope.
       }
   }
   ```
-
-- Both attributes can be applied to individual functions, modules, or
-  (via `@auto_coerce`) entire files.  They are **not** permitted inside
-  `@trusted` functions or in Strict Mode, where all permissions must
-  remain explicit.
 
 ### Explicit Lifetime Parameters
 When the compiler cannot infer lifetimes, you may annotate them explicitly:
@@ -676,6 +721,30 @@ type DynExpr<T> = enum {
 - When matching an existentially quantified variant, the compiler introduces fresh, abstract type variables for each `exists` parameter. These variables are kept distinct and cannot be unified with anything outside the branch. The branch body can use them, but they remain opaque except as dictated by the `when` constraint (e.g., from `T == [X]` we know the outer type `T` is a slice of some element type, but we cannot assume anything else about `X`).
 - The existentially quantified variables are scoped to the match arm and are prevented from leaking into the surrounding context by an occurs‑check at the branch boundary.
 
+##### Existential Variable Resolution
+
+1. **`when X == ConcreteType`** (X directly constrained to a concrete type)
+   - X is resolved to `ConcreteType` within the branch body.
+   - X is removed from `GadtContext.facts`.
+   - Any use of X in the branch body is equivalent to using `ConcreteType`.
+
+2. **`when T == Expr<X₁, X₂, ...>`** (X appears inside a compound type expression)
+   - `T` is refined to `Expr<X₁, X₂, ...>`.
+   - `X₁, X₂, ...` remain opaque (still type variables in `GadtContext`).
+   - The branch body may exploit the structure of `Expr<X₁, X₂, ...>`
+     (field access, indexing, passing as a function parameter type),
+     but cannot assume the concrete identity of `X₁, X₂, ...`.
+   - `GadtContext` records `T ≡ Expr<X₁, X₂, ...>`.
+   - At the end of the branch body, the refinement of `T` and the existential
+     variables `X₁, X₂, ...` are popped together.
+
+3. **`when X == Y`** (equality between two existential variables)
+   - `X` and `Y` are equivalent, both remain opaque.
+   - `GadtContext` records `X ≡ Y`.
+   - Within the branch body, any occurrence of `X` can be replaced by `Y` and
+     vice versa.
+   - The equivalence is popped at the end of the branch body.
+
 ##### Pattern Matching and Type Refinement
 
 When a GADT value is examined via `match`, `if let`, or `while let`, the compiler uses the variant’s `when` constraints to refine the types in the corresponding branch. This enables writing type‑safe operations without redundant casts.
@@ -737,9 +806,21 @@ rules:
    are still subject to the usual compatibility check, which will
    naturally reject incompatible payload types.
 
+7. **Unreachable alternatives** within an or‑pattern (variants statically
+   proven impossible for the scrutinee type) are ignored for the purpose
+   of equality intersection.  A compile‑time warning is emitted for each
+   unreachable alternative.  The intersection is computed solely over
+   the reachable alternatives.
+
 These rules are purely mechanical—the compiler performs deterministic
 equality propagation without constraint solving, backtracking, or
 implicit derivation.
+
+**Interaction with trait resolution**: GADT refinements are visible to trait
+obligation resolution within the branch body. Obligations are resolved **eagerly**
+at the point of use, using the current GADT equality context. If the context
+does not uniquely determine a trait instance, a compile‑time error is raised
+immediately. Obligations are never deferred past the end of the branch body.
 
 **Example:**
 
@@ -789,6 +870,16 @@ type Expr<T> = enum {
 
 Constructors of GADT variants are subject to the same type‑checking and contract verification as any other constructor. If a variant has an invariant or a `validate` function, those apply after the `when` constraints have been satisfied.
 
+**Construction verification timing**: For enum variants without `when`
+constraints (e.g., `Option::Some(1)`), the compiler does not require
+concrete type arguments at the construction site.  Type inference proceeds
+normally: (1) call-site constraints propagate back via suspended
+constraints; (2) defaulting applies to unresolved variables (integer
+literals → `Int<32>`); (3) `when` constraints are verified against the
+fully resolved types.  E060 is raised only if a `when` constraint fails
+after solve + defaulting, not if type variables are merely unresolved at
+the construction site.
+
 ##### Limitations and Future Directions
 
 - Equality constraints of the form `T == Type` are supported, where `Type`
@@ -816,11 +907,11 @@ type Expr<T> = enum {
 }
 
 def eval<T>(e: Expr<T>) -> T {
-    match e {
-        Lit(n) => return n,
-        Neg(x) => return -eval(x),
-        Add(a, b) => return eval(a) + eval(b),
-        Eq(a, b) => return eval(a) == eval(b),
+    return match e {
+        Lit(n) => n,
+        Neg(x) => -eval(x),
+        Add(a, b) => eval(a) + eval(b),
+        Eq(a, b) => eval(a) == eval(b),
         If(c, t, f) => if eval(c) { return eval(t) } else { return eval(f) },
     }
 }
@@ -840,8 +931,8 @@ type DynExpr<T> = enum {
 def slice_length<T>(e: DynExpr<T>) -> usize
     requires T == [X] for some X   // conceptual requirement
 {
-    match e {
-        Slice(s) => return s'len,   // s: &[X], length available
+    return match e {
+        Slice(s) => s'len,   // s: &[X], length available
         _ => panic("not a slice"),
     }
 }
@@ -938,8 +1029,8 @@ The following attributes are not layout‑specific but affect language semantics
 | `@inline` | Function | Forces inlining at call sites; compile error if not possible |
 | `@noinline` | Function | Prevents inlining of the function |
 | `@auto_deref` | impl Deref | Allows method‑call receiver auto‑dereferencing for this `Deref` implementation. Without this attribute, a `Deref` impl requires explicit `(*x).method()` syntax for method calls through the wrapper type. `&T` / `&mut T` are exempt and always auto‑dereference. |
-| `@auto_coerce` | Function, Module, File | Enables all safe implicit coercions within the annotated scope, including `&mut T` → `&T` and deref coercions. Not permitted in `@trusted` functions or Strict Mode. |
-| `@auto_ro` | Function, Module | Allows implicit `&mut T` → `&T` coercion within the annotated scope. Not permitted in `@trusted` functions or Strict Mode. |
+| `@auto_coerce` | Function, Module, File | Enables all safe implicit coercions within the annotated scope (function, module, or file), including `&mut T` → `&T` and deref coercions. Not permitted in `@trusted` functions or Strict Mode. |
+| `@auto_ro` | Function, Module | Allows implicit `&mut T` → `&T` coercion within the annotated function or module. Implicit coercions do not freeze the source variable. Not permitted in `@trusted` functions or Strict Mode. |
 | `@must_use` | Function, Type | Compiler warns if the return value is silently discarded. `Result` and `Option` are implicitly `@must_use`. |
 | `@must_handle(Variant1, ...)` | Function (returning `Result`) | Compiler warns if the caller does not explicitly match or catch the listed error variants. Variant names are resolved against the error type `E` of `Result<_, E>`. If a variant name is ambiguous in the current scope, the compiler emits an error and requires explicit qualification using `EnumName::Variant`. |
 | `@tailrec` | Function | Verifies that all recursive calls are in tail position and enforces tail‑call optimization; compile error if not possible |
@@ -1356,7 +1447,7 @@ User‑defined operator overloading is achieved by implementing the correspondin
 
 Overload resolution follows method lookup rules: the compiler searches for an `impl` of the corresponding trait in the current scope and in the defining modules of the operand types. No implicit type coercion is performed to satisfy operator resolution; all operand types must match exactly.
 
-Overflow‑suffixed operators (`+%`, `+?`, `+!`) are **not** overloadable; they are compiler intrinsics that apply the overflow policy after the underlying addition.
+Overflow‑suffixed operators (`+%`, `+?`, `+!`) are **not** overloadable; they are compiler intrinsics that apply the overflow policy after the underlying addition, for both integer and floating-point types.
 
 The error propagation operator `?`, the compile‑time call marker `!`, and the `as`/`as!` casts are not part of the trait system; they are compiler‑defined operations.
 
@@ -1745,6 +1836,36 @@ def function_name(param1: Type1, param2: Type2) -> ReturnType { ... }
 ```
 Default parameter values: `def f(x: Int<32> = 0) { ... }`
 A function body must use an explicit `return` statement to produce its result; the final expression in a body is never implicitly returned.
+
+#### Two-Phase Borrows
+
+When a method call `receiver.method(args)` or a function call where a
+mutable borrow `&mut x` and another reference to `x` appear as arguments,
+the compiler implicitly defers the activation of the mutable borrow
+until after all arguments have been evaluated.  During argument
+evaluation, `x` remains readable (its mutable borrow is in a `reserved`
+state, not yet `active`).  Once all arguments are fully evaluated and any
+shared borrows of `x` within them have reached their last use, the
+mutable borrow activates and `x` becomes exclusive.
+
+This relies on **point‑level liveness**: shared borrows of `x`
+within the arguments die at their last use point (the argument-passing
+expression), not at the end of a lexical block.  The mutable borrow
+activates only after all shared borrows are dead, so the two borrows
+never overlap.
+
+This enables:
+```posita
+v.push(v.len());   // len() reads v (reserved), then push borrows &mut v (active)
+```
+
+The explicit `&ro` form remains available:
+```posita
+v.push((&ro v).len());  // explicit read-only borrow, scoped to the sub-expression
+```
+
+Two-phase borrows are a compiler-internal rule and do not require opt-in.
+They do not interact with `@auto_ro` or `@auto_coerce` attributes.
 
 ### Return Value Semantics
 
@@ -2365,6 +2486,17 @@ def identity<T: Copy + Default>(x: T) -> T { return T::default(); }
 ```
 This is syntactic sugar for `where T: Copy + Default`.
 
+A `where` clause may also express type equality constraints. When two type
+parameters are equated (`where T == U`), both parameters are treated as
+identical within the function body and are exempt from the generality
+check (`E104`). Redundant constraints (where the parameters are already
+known to be equivalent) produce a compiler warning (`redundant_where_eq`),
+not an error.
+
+```posita
+def f<T, U>(x: T, y: U) -> U where T == U { return x; }
+```
+
 The `where` clause also supports tuple syntax to apply a multi‑type constraint to a tuple of type parameters:
 ```posita
 where (T, U): MyConstraint<T, U>
@@ -2377,6 +2509,25 @@ constraint SortableContainer<C> { C: Container, C::Item: Ord, C::Item: Default }
 def sort<C>(container: &mut C) where C: SortableContainer { ... }
 ```
 Constraints may be combined with `+`: `def f<T>() where T: A + B { ... }`. Constraints may also reference other constraints, forming a hierarchy.
+
+### Generic Parameter Generality
+
+The body of a generic function must type‑check for **all** possible
+instantiations of its type parameters.  A type parameter may not be unified
+with a concrete type within the function body (unless explicitly constrained
+by a `where` clause).  Attempting to do so results in compile‑time error
+`E104`.
+
+Similarly, two distinct type parameters (e.g., `T` and `U`) may not be
+unified with each other inside the function body.
+
+This rule enforces parametricity: the implementation must not depend on the
+identity of any type parameter.  Type equalities introduced by GADT pattern
+matching, which are scoped to a branch and enforced by the GADT context, are
+exempt from this check.
+
+Const generic parameters are inherently exempt, as they are monomorphized
+for each concrete value.
 
 ---
 
@@ -2544,7 +2695,7 @@ def main() -> Result<(), AppError> {
 - **From Rust**: `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
 - **From Zig**: The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS**: The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
-- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), nested GADT refinement rules, graded binder annotations, I/O effect aliases, audit rules, and more.
+- **Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave`/`leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), nested GADT refinement rules, graded binder annotations, I/O effect aliases, audit rules, floating-point overflow control (trap/ieee/saturate), compile-time floating-point exception detection, Two-Phase Borrows, Point-level liveness, Temporary view freeze, Place-level move semantics (partial move with Full/Partial/Moved tracking for structs, arrays, and enums), `where` type equality constraints, generic parameter generality, and more.
 
 ---
 
