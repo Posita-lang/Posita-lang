@@ -199,7 +199,7 @@ following Graded Modal Dependent Type Theory (GrTT). A grade is a
 component of the function's **type**, not merely a property of its body:
 
 ```
-def f(@consume(s) x: T) -> B     -- type: (x: T @ s) → B
+def f(@consume(s) x: T) -> B     // type: (x: T @ s) → B
 ```
 
 **Subject and type grades.** Every binder carries two grades:
