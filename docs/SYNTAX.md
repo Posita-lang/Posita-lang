@@ -1,5 +1,5 @@
 # Posita Language Syntax
-Document revision: 2026-08-23 (working draft, not a frozen specification)
+Document revision: 2026-10-03 (working draft, not a frozen specification)
 
 > This revision integrates graded function types (GrTT), erased value
 > indices, and the `Lease` modality. `@consume` is extended from a
@@ -38,13 +38,13 @@ Posita is a ultra‑static, systems programming language where the programmer ex
 `def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`,
 `comptime`, `import`, `as`, `true`, `false`, `auto`, `and`, `or`, `not`, `sizeof`, `alignof`,
 `catch`, `panic`, `unsafe`, `let`, `finally`,
-`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`, `const`, `forall`
+`where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `ro`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`, `const`, `forall`
 
-`Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words. `linear`, `consume` are planned keywords; `by` is reserved for closure capture syntax.
+`Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words. `ro` is a keyword, used only in the `&ro` read‑only borrow operator. `linear`, `consume` are planned keywords; `by` is reserved for closure capture syntax.
 
 ### Identifiers
 
-`[a‑zA-Z_][a‑zA-Z0-9_]*`
+`[a‑zA‑Z_][a‑zA‑Z0‑9_]*`
 
 ### Literals
 
@@ -378,10 +378,7 @@ enabling static verification without manual `comptime` expansion.
 
 #### Monomorphization
 
-Every distinct combination of `const` argument values results in a separate
-monomorphized instance. The compiler guarantees identical runtime behavior as
-if the code were hand‑written for each constant, with all checks resolved at
-compile time.
+Every distinct combination of `const` argument values results in a separate monomorphized instance. The compiler guarantees identical runtime behavior as if the code were hand‑written for each constant, with all checks resolved at compile time.
 
 ### Ghost Value Indices
 
@@ -616,8 +613,9 @@ with zero runtime overhead.
 During the lifetime of the `&ro` borrow, the original mutable reference
 (`r`) is frozen and cannot be used for mutation.
 
-`&ro` is not a keyword; `ro` only has special meaning when immediately
-following `&` in a borrow expression.
+`ro` is a reserved keyword. It has meaning only immediately following
+`&` as part of the `&ro` read‑only borrow operator. It cannot be used
+as an identifier, and any occurrence outside `&ro` is a syntax error.
 
 The borrow checker enforces the following semantics for `&ro`:
 
@@ -1197,7 +1195,7 @@ def slice_length<T>(e: DynExpr<T>) -> usize
     return match e {
         Slice(s) => s'len,   // s: &[X], length available
         _ => panic("not a slice"),
-    }
+    };
 }
 ```
 
