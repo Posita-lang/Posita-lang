@@ -1,10 +1,13 @@
 # Posita Language Syntax
-Document revision: 2026-10-03 (working draft, not a frozen specification)
+Document revision: 2026-10-04 (working draft, not a frozen specification)
 
-> This revision integrates graded function types (GrTT), erased value
-> indices, and the `Lease` modality. `@consume` is extended from a
-> binder-local assertion to a component of function types (breaking;
-> see Graded Function Types).
+> This revision integrates the lexical decisions on `\x` range, escape
+> recovery, and whitespace/BOM handling. Breaking lexical changes:
+> `\xNN` in `'...'` / `"..."` is now ASCII-only (0x00–0x7F); byte
+> contexts `b'...'` / `b"..."` retain 0x00–0xFF; unknown escapes are
+> hard errors; non-ASCII whitespace is rejected by default; BOM is
+> permitted only as the file-start UTF-8 signature. The prior GrTT /
+> erased-index / `Lease` integration remains in force.
 
 [!NOTE]
 This document version tracks its own edits. It does not correspond to a language specification release.
@@ -78,9 +81,17 @@ Built‑in type aliases:
 
 ### Escape Sequences
 
-The following escape sequences are recognized in string literals, byte string literals, and character literals. They are resolved by the lexer at compile time and replaced with the corresponding byte or Unicode scalar value.
+Escape sequences are recognized in character literals, string literals, byte character literals, and byte string literals. They are resolved by the lexer at compile time. The grammar is shared by all four literal contexts:
 
-| Sequence | Name | Byte Value |
+```
+escape ::= \n | \r | \t | \\ | \" | \' | \0
+         | \x hex{2}
+         | \u{ hex+ }
+```
+
+The syntax of an escape is recognized uniformly. Its **semantic validity** is checked in a second phase against the surrounding literal context. Unknown escapes are hard lexical errors; context-invalid escapes are hard lexical errors with a repair suggestion.
+
+| Sequence | Name | Resolved value |
 |---|---|---|
 | `\n` | Line Feed | 0x0A |
 | `\r` | Carriage Return | 0x0D |
@@ -89,16 +100,60 @@ The following escape sequences are recognized in string literals, byte string li
 | `\"` | Double Quote | 0x22 |
 | `\'` | Single Quote | 0x27 |
 | `\0` | Null Character | 0x00 |
-| `\xNN` | Hex Byte (2 digits) | 0xNN |
-| `\u{NNNNNN}` | Unicode Scalar (1‑6 hex digits) | UTF‑8 encoded bytes |
+| `\xNN` | Hex Byte (2 digits) | byte 0xNN. In `'...'` / `"..."`, NN ∈ 0x00–0x7F. In `b'...'` / `b"..."`, NN ∈ 0x00–0xFF. |
+| `\u{H+}` | Unicode Scalar (1–6 hex digits) | UTF‑8 encoded scalar value. Valid only in `'...'` / `"..."`. |
 
-In character literals (`'...'`), the escape must resolve to exactly one valid Unicode scalar value of type `Char`.
+`\x` has exactly one meaning everywhere: **byte 0xNN**. It is never a Unicode code point escape. Unicode scalar values are written with `\u{...}`. This preserves the rule “one token, one meaning” and keeps `Str`’s “guaranteed valid UTF‑8” invariant intact.
 
-In byte characters (`b'...'`), `\u{...}` is not valid; only byte escapes may appear.
+Full context matrix:
 
-In byte strings (`b"..."`), the same restriction holds.
+| Escape | Semantics | `'...'` | `"..."` | `b'...'` | `b"..."` |
+|---|---|---|---|---|---|
+| `\n` `\r` `\t` `\\` `\"` `\'` `\0` | fixed value | ✔ | ✔ | ✔ | ✔ |
+| `\xNN` | byte 0xNN | NN ≤ 0x7F | NN ≤ 0x7F | NN ∈ 0x00–0xFF | NN ∈ 0x00–0xFF |
+| `\u{H+}` | scalar value | ✔ | ✔ | ✘ | ✘ |
 
-The sequences `\a`, `\b`, `\v`, `\f`, and `\?` are not recognized in Posita string literals. If needed, use the equivalent `\xNN` form.
+Context rules:
+
+- In character literals (`'...'`), the literal must resolve to exactly one valid Unicode scalar value of type `Char`. Since `\xNN` is restricted to NN ≤ 0x7F in this context, it always denotes an ASCII scalar value. A non-ASCII scalar must be written with `\u{...}`.
+- In byte characters (`b'...'`), the literal must resolve to exactly one byte of type `Byte`. `\u{...}` is not valid here.
+- In byte strings (`b"..."`), only byte escapes are valid. `\u{...}` is not valid here.
+- In strings (`"..."`), `\xNN` is ASCII-only. `\u{...}` may be used for any Unicode scalar value.
+
+Diagnostics:
+
+- `E-lex-unknown-escape`: an escape form not in the shared grammar (for example `\p`, `\q`, `\e`) is a hard lexical error. The compiler never silently degrades an unknown escape into a literal backslash. C-style “unknown escape warning + literal backslash” is incompatible with Posita’s no-UB and explicitness commitments.
+- `E-lex-escape-range`: `\xNN` appears in `'...'` or `"..."` with NN > 0x7F. Suggested repair: “若欲表达码点 U+00E9，请写 `\u{E9}`；若欲写字节，请使用 `b\"...\"`”.
+- `E-lex-escape-context`: a syntactically valid escape is used in a context that cannot accept it, e.g. `\u{...}` inside `b'...'` or `b"..."`.
+
+The sequences `\a`, `\b`, `\v`, `\f`, and `\?` are not recognized in Posita string literals. If needed, use the equivalent `\xNN` form. This is a lexical convenience decision, not a semantic decision about the characters themselves.
+
+### Whitespace, BOM, and Unicode Versioning
+
+Whitespace is split into three distinct layers. They are not the same set.
+
+| Layer | `\x0B` (VT, U+000B) | BOM (U+FEFF) |
+|---|---|---|
+| Value-level whitespace (`char.is_whitespace()`, `trim`, `split_whitespace`) | yes (`White_Space=yes`, aligned with C `isspace` and Rust) | no (`White_Space=no`, category Cf format character) |
+| Lexical whitespace (token separator) | yes, but `capsa audit` flags occurrence position | only allowed as the first bytes of a file, stripped as an encoding signature; elsewhere it is an error |
+| Encoding layer (BOM’s true identity) | not applicable | UTF‑8 signature; after stripping it never enters the token stream |
+
+Lexical whitespace is the ASCII closed set:
+
+```
+0x20  SPACE
+0x09  HORIZONTAL TAB
+0x0A  LINE FEED
+0x0D  CARRIAGE RETURN
+0x0B  VERTICAL TAB
+0x0C  FORM FEED
+```
+
+This aligns with C `isspace` and is friendly to older toolchains. Non-ASCII Unicode whitespace (`NBSP`, full-width spaces, etc.) is rejected by default. A lint may relax this in explicitly opted-in modules, but the default is an error. This makes invisible-character Trojan-Source style confusion and “same glyph, different bytes” diff noise visible by default.
+
+BOM is never whitespace. If `trim` stripped U+FEFF, a signature could be silently swallowed when concatenating external data. Posita’s philosophy is that signature loss must be handled explicitly: the author should strip and check BOM deliberately, not have it erased by a “whitespace” semantic. This is also consistent with the Unicode stability policy: zero-width word semantics are carried by U+2060, while U+FEFF remains reserved for signature use.
+
+`edition = "2026"` binds a specific Unicode version and its derived `White_Space` table as a compile-time constant inlined into the compiler and standard library documentation. The whitespace set, case tables, and similar Unicode-derived properties are therefore reproducible, auditable, and available to `comptime` reflection. The only way to upgrade whitespace semantics is to upgrade the edition.
 
 ### Comments
 
@@ -889,7 +944,7 @@ def read_and_parse() -> Result<Data, IoOrParseError> {
 
 **Restriction:** The `|` operator is only permitted in `type` alias declarations. Inline `A | B` in function signatures is not allowed; the combination must be given an explicit name.
 
-**Variant uniqueness:** All variant names across the combined enums must be distinct. If two enums share a variant name (e.g., both define `Timeout`), the compiler reports an error. Disambiguation requires qualifying the variant name with its enum type (e.g., `IoError::Timeout` vs `NetError::Timeout`), which is permitted in `catch` and `match` patterns when the variant name is ambiguous, but not in type declarations.
+**Variant uniqueness:** All variant names across the combined enums must be distinct. If two enums share a variant name (e.g., both define `Timeout`), the compiler reports an error. Disambiguation requires qualifying the variant name with its enum type (e.g., `IoError::Timeout` vs. `NetError::Timeout`), which is permitted in `catch` and `match` patterns when the variant name is ambiguous, but not in type declarations.
 
 **Transparency:** The alias is fully transparent to the type system. The compiler expands `IoOrParseError` to the full set of variants at compile time. `catch` branches, `@must_handle` annotations, and `match` expressions can reference individual variants by their original names without qualifying through the alias.
 
@@ -1101,7 +1156,7 @@ def eval<T>(e: Expr<T>) -> T {
         Add(Lit(a), Lit(b)) => a + b,   // nested refinement works
         Eq(x, y) => eval(x) == eval(y),
         If(c, t, f) => if eval(c) { return eval(t) } else { return eval(f) },
-    }
+    };
 }
 ```
 
@@ -1895,6 +1950,8 @@ Each file declares its edition:
 ```
 edition = "2026";
 ```
+
+An edition binds a specific Unicode version and its derived `White_Space` table as compile-time constants. Upgrading whitespace semantics, case tables, or similar Unicode-derived properties requires an edition upgrade. See §Whitespace, BOM, and Unicode Versioning.
 
 ### Deprecation
 
@@ -3142,7 +3199,7 @@ def main() -> Result<(), AppError> {
 - **From ATS:** The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
 - **From F\*, DML, ATS:** erased value indices — types may mention runtime values with all type-level dependency discharged at compile time (F\*/DML) and invariants encoded in types (ATS).
 
-**Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave` / `leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), nested GADT refinement rules, graded function types with mechanical propagation, Lease modality, ghost value indices, unified grade lattice (value / ghost / const / contract as four channels), I/O effect aliases, audit rules, floating-point overflow control (trap/ieee/saturate), compile-time floating-point exception detection, Two-Phase Borrows, Point-level liveness, Temporary view freeze, Place-level move semantics (partial move with Full/Partial/Moved tracking for structs, arrays, and enums), `where` type equality constraints, generic parameter generality, and more.
+**Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave` / `leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), nested GADT refinement rules, graded function types with mechanical propagation, Lease modality, ghost value indices, unified grade lattice (value / ghost / const / contract as four channels), I/O effect aliases, audit rules, floating-point overflow control (trap/ieee/saturate), compile-time floating-point exception detection, Two-Phase Borrows, Point-level liveness, Temporary view freeze, Place-level move semantics (partial move with Full/Partial/Moved tracking for structs, arrays, and enums), `where` type equality constraints, generic parameter generality, ASCII-only `\x` in text literals with byte-exact `b"..."`, hard-error escape recovery, three-layer whitespace/BOM semantics, edition-frozen Unicode tables, and more.
 
 ## Design Q&A
 
@@ -3477,3 +3534,11 @@ A: `const` parameters are compile-time known, shape layout, and monomorphize. Gh
 **Q: Is grade inference "implicit" in the bad sense?**
 
 A: No. Inference is analysis (facts, never entering signatures); declaration is commitment (enters the type, constrains callers). Same relation as type inference vs. type annotations.
+
+**Q: Why is `\x` ASCII-only in text literals?**
+
+A: Because `\x` means *byte* everywhere. In a `Str`, allowing `\x80`–`\xFF` would either insert invalid UTF‑8 or silently switch to Latin‑1 code-point semantics, violating the one-token-one-meaning rule and the valid-UTF‑8 invariant. Unicode scalars have their own escape, `\u{...}`. Byte strings retain the full `0x00`–`0xFF` range because they are explicitly byte-oriented.
+
+**Q: Is `\x0B` whitespace? Is BOM whitespace?**
+
+A: `\x0B` (VT, U+000B) is value-level whitespace (`White_Space=yes`) and is also lexical whitespace, but `capsa audit` flags its occurrence position. BOM (U+FEFF) is never whitespace: it is a UTF‑8 signature allowed only at the beginning of a file, where the lexer strips it. Non-ASCII Unicode whitespace is rejected by default. These three layers — value, lexical, encoding — are deliberately distinct and edition-frozen.
