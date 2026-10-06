@@ -109,9 +109,9 @@ Full context matrix:
 
 | Escape | Semantics | `'...'` | `"..."` | `b'...'` | `b"..."` |
 |---|---|---|---|---|---|
-| `\n` `\r` `\t` `\\` `\"` `\'` `\0` | fixed value | ✔ | ✔ | ✔ | ✔ |
+| `\n` `\r` `\t` `\\` `\"` `\'` `\0` | fixed value | √ | √ | √ | √ |
 | `\xNN` | byte 0xNN | NN ≤ 0x7F | NN ≤ 0x7F | NN ∈ 0x00–0xFF | NN ∈ 0x00–0xFF |
-| `\u{H+}` | scalar value | ✔ | ✔ | ✘ | ✘ |
+| `\u{H+}` | scalar value | √ | √ | ✘ | ✘ |
 
 Context rules:
 
