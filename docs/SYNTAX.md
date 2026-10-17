@@ -1,5 +1,5 @@
 # Posita Language Syntax
-Document revision: 2026-10-04 (working draft, not a frozen specification)
+Document revision: 2026-10-18 (working draft, not a frozen specification)
 
 > This revision integrates the lexical decisions on `\x` range, escape
 > recovery, and whitespace/BOM handling. Breaking lexical changes:
@@ -38,7 +38,7 @@ Posita is a ultra‑static, systems programming language where the programmer ex
 
 ### Keywords
 
-`def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`,
+`def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`, `match`, `continue`,
 `comptime`, `import`, `as`, `true`, `false`, `auto`, `and`, `or`, `not`, `sizeof`, `alignof`,
 `catch`, `panic`, `unsafe`, `let`, `finally`,
 `where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `ro`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`, `const`, `forall`
@@ -712,7 +712,7 @@ equivalent of `&ro`) at the point where mutability is surrendered:
 ```
 def process_and_filter(v: &mut Vector<Int<32>>) -> Vector<Int<32>> {
     return v.iter_mut()
-            .freeze!()              // explicit transition to read‑only view
+            .freeze!()              // explicit transition to read-only view
             .filter(|x| *x > 0)
             .map(|x| *x * 2)
             .collect();
