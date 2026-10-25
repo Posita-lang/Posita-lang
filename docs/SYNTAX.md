@@ -1,5 +1,5 @@
 # Posita Language Syntax
-Document revision: 2026-10-18 (working draft, not a frozen specification)
+Document revision: 2026-10-25 (working draft, not a frozen specification)
 
 > This revision integrates the lexical decisions on `\x` range, escape
 > recovery, and whitespace/BOM handling. Breaking lexical changes:
@@ -7,7 +7,10 @@ Document revision: 2026-10-18 (working draft, not a frozen specification)
 > contexts `b'...'` / `b"..."` retain 0x00–0xFF; unknown escapes are
 > hard errors; non-ASCII whitespace is rejected by default; BOM is
 > permitted only as the file-start UTF-8 signature. The prior GrTT /
-> erased-index / `Lease` integration remains in force.
+> erased-index / `Lease` integration remains in force. This revision
+> also introduces top-level bindings (`const`, immutable `static`, and
+> `static NAME: Global<T, P>` for controlled shared state) and the
+> `@shared` effect.
 
 [!NOTE]
 This document version tracks its own edits. It does not correspond to a language specification release.
@@ -17,7 +20,7 @@ Posita itself is in pre‑alpha; the syntax is under active design and may chang
 
 Posita is a ultra‑static, systems programming language where the programmer explicitly posits every representation detail: bit widths, pointer sizes, default values, error paths, overflow behavior, and even resource consumption protocols. All decisions are made visible in source and enforced at compile time with zero runtime overhead.
 
-- **Explicit over implicit:** No hidden ABI, no type‑erased errors, no null pointers, no implicit overflow, no invisible allocations. All critical semantic effects—compile‑time execution (`!`), error propagation (`?`), asynchronous suspension (`await`)—are marked with dedicated syntax at the point of use. Unsafe operations are confined to functions marked `@trusted` at the point of declaration, establishing explicit trust boundaries. Reviewers can see every important behavior without reading function definitions.
+- **Explicit over implicit:** No hidden ABI, no type‑erased errors, no null pointers, no implicit overflow, no invisible allocations. All critical semantic effects—compile‑time execution (`!`), error propagation (`?`), asynchronous suspension (`await`)—are marked with dedicated syntax at the point of use. Unsafe operations are confined to functions marked `@trusted` at the point of declaration, establishing explicit trust boundaries. Access to shared mutable state is marked with the `@shared` effect at the function signature. Reviewers can see every important behavior without reading function definitions.
 
 - **Explicit commitments, implicit verification.** Posita distinguishes
   *analysis* from *commitment*. The compiler implicitly analyzes all code —
@@ -40,10 +43,10 @@ Posita is a ultra‑static, systems programming language where the programmer ex
 
 `def`, `set`, `type`, `with`, `default`, `return`, `if`, `else`, `for`, `in`, `while`, `loop`, `leave`, `match`, `continue`,
 `comptime`, `import`, `as`, `true`, `false`, `auto`, `and`, `or`, `not`, `sizeof`, `alignof`,
-`catch`, `panic`, `unsafe`, `let`, `finally`,
+`catch`, `panic`, `unsafe`, `let`, `finally`, `static`, `const`,
 `where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `ro`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`, `const`, `forall`
 
-`Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words. `ro` is a keyword, used only in the `&ro` read‑only borrow operator. `linear`, `consume` are planned keywords; `by` is reserved for closure capture syntax.
+`Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words. `ro` is a keyword, used only in the `&ro` read‑only borrow operator. `linear`, `consume` are planned keywords; `by` is reserved for closure capture syntax. `static` is a top‑level binding keyword; it has no meaning inside a block.
 
 ### Identifiers
 
@@ -1343,6 +1346,236 @@ type IoReg = struct { flags: UInt<8>, addr: UInt<32> };
 
 **Auditability:** The compiler expands all layout aliases at their use sites. Tools like `capsa audit` and IDE hover information display the fully expanded attribute set, ensuring that the effective layout is always visible at the type definition.
 
+## Top-level Bindings
+
+Top-level bindings declare module-scope entities with a fixed name and a single storage class. They are the only declarations permitted at module scope besides items (`def`, `type`, `trait`, `impl`, `import`, `extern`, `constraint`, `edition`, `layout`, `generate`, `comptime`, `async def`).
+
+**Design principle: bindings have existence, not mutability.** A top-level binding is never re-assignable. Mutability, when needed, is carried by the *type* (`Global<T, P>`) and surfaced through the `@shared` effect at every access site. This keeps purity (`@pure`), isolation (`isolate`), WCET (`@no_panic`), audit (`capsa audit`), and strict-mode contracts intact — a bare top-level `set mut` would silently break every one of them.
+
+**Forbidden at top level:** `set`, `let`, `set mut`, `let mut`. These are *statements*; they live inside function bodies, `comptime` blocks, `scope_cleanup` blocks, and other block-scoped constructs. There is no `static mut` syntax; mutable state is expressed only through `Global<T, P>`.
+
+### Three binding forms
+
+| Form | Existence | Binding mutability | Initializer | Access effect | Typical use |
+|---|---|---|---|---|---|
+| `const NAME: T = expr;` | Compile-time | none (no storage) | `comptime` constant expression | none | configuration constants, table sizes |
+| `static NAME: T = expr;` | Runtime, single storage | **immutable binding** | `comptime` constant expression, or `T'default` | none (read-only) | read-only tables, version strings, MMIO base addresses |
+| `static NAME: Global<T, P> = Global::new(...);` | Runtime, single storage | immutable binding, **interior mutability** | `comptime` constant | `@shared` required | counters, lock-protected caches |
+
+Rules:
+
+- `const` has no runtime storage; uses are inlined at compile time. Recommended default.
+- `static` has exactly one storage location; `&NAME` yields a `&'static T`. Because the binding is immutable, this is a safe shared read-only reference.
+- `static` initializers must be compile-time constant expressions: literals, `const` items, `comptime` function calls with `!`, or `T'default`. This eliminates the C++ static initialization order fiasco entirely — every `static` is fully initialized before `main`.
+- A `static` without an initializer (`static X: T;`) requires `T` to not be `no_default`; its value is `T'default`.
+- A `static` whose initializer is not compile-time constant is a compile error (`E-static-init-not-const`). For runtime initialization, use `Global<T, Once>` with an `@init` function (see §Runtime initialization).
+
+```
+const MAX_CONNECTIONS: usize = 1024;
+
+static VERSION: &Str = "1.0.0";
+
+// Zero-initialization / type default: requires T not to be no_default
+static DEFAULT_TIMEOUT: UInt<32>;          // = UInt<32>'default
+static EMPTY_CONFIG: Config;               // requires Config to have a default and
+                                           // for that default to be a comptime constant
+
+// Explicit constant initializer
+static LOOKUP: [UInt<8>; 256] = build_table!();
+```
+
+### `Global<T, P>`: the only mutable top-level state carrier
+
+`Global<T, P>` is a standard-library type; `P` is a *strategy* parameter. Key properties:
+
+- **The binding is immutable.** `static COUNTER: Global<...>` cannot be reassigned.
+- **Mutability is encapsulated inside the type**, implemented by `@trusted` standard-library code.
+- **Every access goes through a method**, with an explicit memory ordering or lock policy.
+- **The compiler records every access as a `@shared` effect**, which enters the function signature.
+
+```
+static COUNTER: Global<UInt<64>, Atomic> = Global::new(0);
+static CACHE:   Global<Cache, Mutex>      = Global::new(Cache'default);
+```
+
+The strategy `P` determines the available operations and the context restrictions:
+
+| Strategy | Requirement | Available operations | Forbidden contexts |
+|---|---|---|---|
+| `Atomic` | `T` is atomically accessible (integers, pointers, Bool) | `load`/`store`/`fetch_add`/`compare_exchange`, each requiring an `Ordering` | `@pure`, `isolate` |
+| `Mutex` / `RwLock` | any `T` | `try_lock` / `lock`, returning a `@linear` guard | `@pure`, `isolate`, `@interrupt` (blocking), `@no_panic` (only `try_lock`) |
+| `UnsafeCell` | any `T` | raw access, only inside `@trusted` or `isolate` | `@pure`, non-`@trusted` |
+| `Once` | any `T` | `init` / `get` (the latter requires `is_initialized()` to be proven) | see §Runtime initialization |
+
+Memory orderings are never defaulted; they must be written out:
+
+```
+@shared(COUNTER, read, write)
+def next_id() -> UInt<64>
+    ensures codomain > 0
+{
+    return COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+}
+```
+
+A `Mutex` guard is `@linear`: it must be explicitly released and cannot be silently discarded. `try_lock` returns `Option<Guard>` and is suitable for `@no_panic` and interrupt contexts:
+
+```
+@shared(CACHE, read, write)
+@no_panic
+def cache_get(key: UInt<32>) -> Option<&'static Value> {
+    let guard = CACHE.try_lock() else { return None; };
+    return guard.get(key);
+}
+```
+
+### The `@shared` effect
+
+`@shared` is a function-level effect, in the same family as `@io`, `@alloc`, and `@pure`. It records that a function accesses shared mutable state.
+
+**Syntax:**
+
+- `@shared(NAME, read)` — read-only access to that global.
+- `@shared(NAME, write)` — write access to that global.
+- `@shared(NAME, read, write)` — read/write access.
+- `@shared(NAME)` — shorthand for `@shared(NAME, read, write)`.
+
+**Rules:**
+
+- Any function that directly accesses a `Global<T, P>` mutable operation must declare `@shared` in its signature, listing the specific global name and the read/write direction. In strict mode, omitting the name or the direction is an error.
+- `@pure` is mutually exclusive with any `@shared(...)`. A `@pure` function may read `const` and immutable `static` bindings; it may not touch any `Global`.
+- `@shared` propagates through the call chain mechanically: if `f` calls `g` and `g` is `@shared`, `f` must also be `@shared` (or wrap the call in a `@trusted` boundary and prove it). Propagation follows the same rule as `@io` in strict mode.
+- `isolate` blocks may not access any external `Global`. The existing definition of `isolate` is "does not access any external mutable state", so this is a natural consequence, not new semantics.
+- `@interrupt` functions may only access `Global` with the `Atomic` strategy; `Mutex`/`RwLock` are forbidden (blocking, priority inversion). The compiler enforces this by strategy type.
+- `capsa audit` reports every `@shared` access point, call chain, memory ordering, and read/write direction. `[audit.rules]` may add:
+
+```
+[audit.rules]
+deny_shared = ["GLOBAL_LOG_BUFFER"]      # forbid access to a specific global
+deny_writes = ["METRICS"]                # permit reads, forbid writes
+require_sync = ["crypto::**"]            # shared access in these modules must use
+                                         # SeqCst/AcqRel
+```
+
+**Why distinguish reads from writes:** WCET analysis needs to separate read-only access (no cache-coherence traffic, predictable latency) from writes (memory barriers, coherence, non-determinism). `@pure` is incompatible with all `@shared` (reading a mutable global is not pure), but audit and WCET tooling need the finer granularity.
+
+### Runtime initialization
+
+Because every `static` is initialized with a compile-time constant, there is no static initialization order fiasco. When a value must be computed at runtime, use an explicit two-phase initialization with `Global<T, Once>`:
+
+```
+static CONFIG: Global<Config, Once> = Global::uninit();
+
+@init
+def init_config() -> Result<(), Error>
+    ensures CONFIG.is_initialized()
+{
+    CONFIG.init(load_config()?);   // may be called exactly once;
+                                   // a second call is a compile-time or runtime error
+    return Ok(());
+}
+```
+
+`@init` functions are called by the runtime before `main`, in an order declared in `posita.toml`, or explicitly from `main`. The `Once` strategy's `get()` returns `&T` but requires `is_initialized()` to be proven; an access to an uninitialized `Once` is a compile-time error when statically detectable, and an explicit panic or `Result` otherwise.
+
+If lazy initialization is genuinely required, the standard library provides `Lazy<T>`, whose `get_or_init` is annotated `@io + @shared` and may be called only once inside `@trusted` code. `capsa audit` flags every use. This is discouraged by default.
+
+### Interaction with existing mechanisms
+
+| Mechanism | Interaction rule |
+|---|---|
+| `isolate` | Accessing a `Global` inside an isolate block → compile error (the "no external mutable state" guarantee) |
+| `@interrupt` | Interrupt handlers may only access `Global` with the `Atomic` strategy; `capsa audit` flags non-atomic accesses in high-priority contexts (priority inversion risk) |
+| `@no_alloc` / `@no_panic` | Effects are orthogonal; but `Mutex::lock` may allocate and therefore conflicts with `@no_alloc` (compile-time rejection), and `@no_panic` requires `try_lock` |
+| `@grades(sec)` | A `Global` may carry a security label; reading a High-labeled global in a Low context is a grade mismatch, declassification requires an explicit downgrade function |
+| `@linear` resources | Hardware handles may be global linear values; `forget`/consume discipline applies. The `Mutex`/`RwLock` guards produced by `Global` are themselves `@linear` |
+| `capsa audit` | Lists every `Global` declaration and its complete access chain (including read/write direction) |
+| Strict Mode | `Global<T, UnsafeCell>` requires `@trusted` plus `@link_proof`/`@comptime_test`, or is forbidden outright |
+
+**`@grades(sec)` refinement:** In a module under `@grades(sec)`, a `Global` may carry a security label as an additional strategy parameter:
+
+```
+@grades(sec)
+static SECRET: Global<Key, Mutex, High> = Global::new(Key::default);
+
+@shared(SECRET, read)   // reading High-label into a Low context is a grade mismatch
+def use_secret() -> ... { ... }
+```
+
+**`@linear` refinement:** `Global<T, Mutex>` and `Global<T, RwLock>` guards are `@linear`; they must be explicitly released and cannot be silently discarded. Global linear resources (e.g., hardware handles) use `Global<T, UnsafeCell>` with a `@trusted` `take` method that consumes the value.
+
+### Diagnostics
+
+- `E-top-mut-binding`: top-level `set`/`let`/`set mut`/`let mut`. Suggested fix: "Top-level bindings are immutable. Use `const`, `static`, or `static NAME: Global<T, P>` for controlled shared state."
+- `E-top-static-mut`: `static mut` appears. Suggested fix: "Use `Global<T, Atomic>` or `Global<T, Mutex>`; mutability belongs to the type, not the binding."
+- `E-static-init-not-const`: a `static` initializer is not compile-time constant. Suggested fix: "Use a `comptime` function call `f!()`, or switch to `@init` + `Global<T, Once>`."
+- `E-pure-shared-access`: a `@pure` function accesses a `Global`.
+- `E-isolate-shared-access`: an `isolate` block accesses an external `Global`.
+- `E-interrupt-blocking-global`: an `@interrupt` function accesses a `Mutex`/`RwLock` `Global`.
+- `E-shared-not-declared`: a function accesses a `Global` without declaring `@shared` (an error in strict mode).
+- `E-shared-direction-missing`: `@shared(NAME)` omits the direction in strict mode. Suggested fix: "Write `@shared(NAME, read)` or `@shared(NAME, write)`."
+
+### Recommended alternative to top-level mutable state
+
+The `Global<T, P>` path is an escape hatch, not the default. Existing mechanisms are preferred:
+
+- **Dependency injection:** pass configuration, loggers, and allocators explicitly, or aggregate them into a `Context` struct. `@pure` functions stay pure.
+- **`task` + `Channel`:** concurrent communication is by message passing, not shared memory. A `Channel` may itself be `static`, but its type is a synchronous queue with its own access discipline, not a bare mutable binding.
+- **`Lease<T, N>`:** resources that need a bounded number of uses use `Lease`; conservation is compiler-verified, with no global mutable binding.
+- **MMIO:** hardware registers are not variables; they are `Ptr`/`@volatile` accesses marked `@io(read/write)`, confined to `unsafe` + `@trusted`. Do not open a top-level `mut` loophole for MMIO.
+
+```
+// Preferred: explicit Context
+def handle_request(ctx: &mut AppContext, req: &Request) -> Result<Response, Error> { ... }
+
+// Not this:
+// static mut CURRENT_CTX: AppContext;   // forbidden
+```
+
+### Complete example
+
+```
+edition = "2026";
+
+const MAX_CONNECTIONS: usize = 1024;
+static VERSION: &Str = "1.0.0";
+
+// Read-only lookup table, generated at compile time
+static CRC_TABLE: [UInt<32>; 256] = build_crc_table!();
+
+// Controlled shared state
+static REQUEST_COUNTER: Global<UInt<64>, Atomic> = Global::new(0);
+static CONFIG_CACHE:    Global<Config, Mutex>    = Global::new(Config'default);
+
+@shared(REQUEST_COUNTER, read, write)
+def next_request_id() -> UInt<64>
+    ensures codomain > 0
+{
+    return REQUEST_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+}
+
+@shared(CONFIG_CACHE, read)
+@no_panic
+def cached_timeout() -> Option<UInt<32>> {
+    let guard = CONFIG_CACHE.try_lock() else { return None; };
+    return Some(guard.timeout);
+}
+
+@pure
+def crc32(data: &[Byte]) -> UInt<32> {
+    set mut c: UInt<32> = 0xFFFFFFFF;
+    for b in data {
+        c = CRC_TABLE[((c ^ (*b as UInt<32>)) & 0xFF) as usize] ^ (c >> 8);
+    }
+    return c ^ 0xFFFFFFFF;
+}
+
+def main() -> Result<(), Error> {
+    // ...
+    return Ok(());
+}
+```
+
 ## Language Attributes
 
 The following attributes are not layout‑specific but affect language semantics or tooling behavior:
@@ -1364,7 +1597,8 @@ The following attributes are not layout‑specific but affect language semantics
 | `@apply_lemma(...)` | Function (verification target) | Applies a lemma (by name) to supply the SMT solver with additional assertions during verification of the annotated function |
 | `@trusted` | Function | Establishes a trust boundary for operations the compiler cannot fully verify, including `unsafe` blocks, raw pointer manipulation, `extern "C"` calls, and dynamic dispatch via `dyn Trait` (in strict mode). Requires `requires`/`ensures` contracts. |
 | `@link_proof(path, hash)` | Function (`@trusted`) | References an external formal proof (e.g., Coq/ATS script) and records its SHA‑256 hash, supplementing the verification of `@trusted` code. In strict mode, every `@trusted` function must be accompanied by either `@link_proof` or at least one `@comptime_test` exercising its safety contract; otherwise compilation fails. `capsa audit` verifies the proof file exists and matches the hash. |
-| `@pure` | Function | No side effects; result depends only on arguments |
+| `@pure` | Function | No side effects; result depends only on arguments. Mutually exclusive with `@shared`. |
+| `@shared(NAME, read)`, `@shared(NAME, write)`, `@shared(NAME, read, write)` | Function | Declares that the function accesses shared mutable state. Names and direction are required in strict mode. Propagates through the call chain. Mutually exclusive with `@pure`; forbidden inside `isolate`. See §Top-level Bindings. |
 | `@io(read)` | Function | May perform input operations |
 | `@io(write)` | Function | May perform output operations |
 | `@io` | Function | May perform any I/O (equivalent to `@io(read, write)`) |
@@ -1383,6 +1617,7 @@ The following attributes are not layout‑specific but affect language semantics
 | `@diverges` | Function | Declares that this function never returns normally. The function's return type may be any `T` (not just `!`), but all reachable paths in the body must diverge (e.g., `loop {}`, hardware halt). The compiler verifies divergence in strict mode. `@diverges` is incompatible with `panic` in the function body (divergence must be deterministic). Compatible with `@no_panic` (non‑panic divergence) and `@trusted`. Not compatible with `@runtime_check`. |
 | `@consume(s)` / `@consume(≤s)` | Parameter | Declares the subject grade as part of the function type; propagated to callers by graded application. Affine params: ≤ 1. See §Graded Function Types. |
 | `@grades(name)` | Module | Selects the usage semiring for the module. See §Usage Semirings. |
+| `@init` | Function | Marks a runtime initializer called before `main`. Used with `Global<T, Once>`. See §Top-level Bindings. |
 
 **Implicit relationships among attributes:**
 
@@ -1393,7 +1628,7 @@ The following attributes are not layout‑specific but affect language semantics
 **Attribute compatibility and precedence:** When multiple attributes are combined, the compiler follows a strict ordering:
 
 1. `@cfg` is evaluated first (determines existence of the item).
-2. Effect annotations (`@pure`, `@io`, `@alloc`, `@no_alloc`, `@no_alloc_error`, `@no_panic`, `@diverges`) are checked for consistency.
+2. Effect annotations (`@pure`, `@shared`, `@io`, `@alloc`, `@no_alloc`, `@no_alloc_error`, `@no_panic`, `@diverges`) are checked for consistency.
 3. Contract‑related attributes (`@trusted`, `@runtime_check`, `@link_proof`, `@lemma`, `@ieee_contracts`) are processed.
 4. Code‑generation attributes (`@inline`, `@noinline`, `@tailrec`, `@auto_deref`) are applied last.
 
@@ -1401,6 +1636,7 @@ The following attributes are not layout‑specific but affect language semantics
 
 - `@pure` + `@runtime_check`
 - `@pure` + `@io`
+- `@pure` + `@shared`
 - `@runtime_check` + `@lemma`
 - `@trusted` + `@runtime_check`
 - `@no_panic` + `@runtime_check`
@@ -1500,6 +1736,7 @@ Posita eliminates language‑level undefined behavior in safe code: no uninitial
 Functions may be annotated with fine‑grained effect markers to describe their side effects. These annotations are checked by the compiler and serve as auditable documentation for reviewers.
 
 - `@pure`: The function has no side effects and its result depends only on its arguments.
+- `@shared(NAME, read/write)`: The function accesses shared mutable state. Mutually exclusive with `@pure`; forbidden inside `isolate`. See §Top-level Bindings.
 - `@io(read)`: The function may perform input operations (reading files, network, etc.).
 - `@io(write)`: The function may perform output operations.
 - `@io(read, write)` or simply `@io`: The function may perform any I/O.
@@ -1552,7 +1789,7 @@ Unqualified `@io(read)` remains valid and grants access to all I/O sources.
 - `@audit_log`: The function must write any runtime contract violation to an immutable audit log. The log storage backend is provided by the standard library; tamper‑evident integrity (e.g., hash chains) is strongly recommended.
 - `@ieee_contracts`: Interprets all floating‑point contracts (both `requires` and `ensures`) on this function under IEEE 754 semantics rather than the mathematical real domain. This attribute is scoped to the annotated function only and does not affect the contract semantics of any callees.
 
-In strict mode the compiler verifies that effect annotations are consistent across call chains. A function calling an `@io(write)` function must itself be annotated at least `@io(write)`.
+In strict mode the compiler verifies that effect annotations are consistent across call chains. A function calling an `@io(write)` function must itself be annotated at least `@io(write)`. A function calling a `@shared` function must itself be `@shared` (or wrap the call in a `@trusted` boundary).
 
 **Closure effect inference:** A closure's effect annotation is the union of the effects of its captured variables and its body. The compiler automatically derives this union and annotates the closure type.
 
@@ -1882,6 +2119,7 @@ def timer_handler() -> ! {
 - Interrupt handler functions must have the return type `!` (never return).
 - The compiler enforces that interrupt handlers satisfy the constraints of `@no_alloc` and `@no_panic`; violations are compile‑time errors. Redundant explicit `@no_alloc` or `@no_panic` annotations are allowed and produce no warning.
 - Interrupt handlers cannot have custom parameters.
+- Interrupt handlers may only access `Global` with the `Atomic` strategy; `Mutex`/`RwLock` are forbidden (blocking, priority inversion). The compiler enforces this by strategy type.
 - The compiler automatically generates the interrupt vector table from all `@interrupt` annotations, respecting platform ABI and optional `@layout` attributes.
 
 ### Task Isolation
@@ -1895,7 +2133,7 @@ isolate {
 }
 ```
 
-`isolate` blocks can be called from multiple interrupt contexts without data‑race risks.
+`isolate` blocks can be called from multiple interrupt contexts without data‑race risks. Any access to a `Global` inside an `isolate` block is a compile error.
 
 ## Modules and Imports
 
@@ -1927,6 +2165,10 @@ exact = ["safety::**"]   # modules locked to exact grades
 [audit.rules]
 deny_effects = ["io:net", "io:serial"]
 require_grades = ["crypto::**"]
+deny_shared = ["GLOBAL_LOG_BUFFER"]      # forbid access to a specific global
+deny_writes = ["METRICS"]                # permit reads, forbid writes
+require_sync = ["crypto::**"]            # shared access in these modules must use
+                                         # SeqCst/AcqRel
 ```
 
 Each entry in `deny_effects` is an effect tag. If any function in the
@@ -1937,9 +2179,14 @@ The `require_grades` entry specifies modules where all public function
 parameters must carry explicit `@consume` annotations; ungraded public
 binders in these modules are compile‑time errors.
 
+The `deny_shared` entry forbids access to a specific global variable.
+The `deny_writes` entry permits reads but forbids writes. The
+`require_sync` entry requires that all shared accesses in the listed
+modules use a specified memory ordering (e.g., `SeqCst` or `AcqRel`).
+
 This mechanism enforces security and safety boundaries at the module
 level, ensuring that critical code cannot accidentally perform
-restricted I/O.
+restricted I/O or touch shared state outside its policy.
 
 ## Language Versioning and Deprecation
 
@@ -1998,6 +2245,7 @@ Posita does not support procedural macros or any form of syntax‑level code gen
 - Network access
 - Spawning processes
 - Calling `@io(write)` functions or any `@trusted` functions that perform I/O
+- Accessing any mutable `Global` (a `comptime` block may read `const` and immutable `static` bindings; it may not touch any `Global`)
 
 Violations are detected at compile time and cause a hard error. This guarantees that `comptime` evaluation is purely a deterministic, side‑effect‑free transformation of the source program.
 
@@ -2209,6 +2457,8 @@ set mut x = 0;
 x = x + 1;
 ```
 
+`set` is a *statement*. It may appear inside a block (function body, `comptime` block, `scope_cleanup` block, etc.), but not at module scope. Top-level bindings use `const` and `static` (see §Top-level Bindings).
+
 **Variable shadowing:** A variable declared in an inner scope may shadow
 a variable of the same name from an outer scope. This is allowed and follows
 lexical scoping rules. However, the compiler will reject shadowing of
@@ -2218,6 +2468,8 @@ immutable variable with the same name in the same scope is also an error.
 ### `let` Bindings
 
 `let` is a restricted, immutable‑only variant of `set` that additionally supports pattern destructuring. A `let` binding is always immutable; there is no `let mut`. It must always be explicitly initialized and cannot rely on a type's default value. A `let` binding that specifies a type annotation without an explicit initializer (`let x: Type;`) is a compile‑time error; use `set` instead.
+
+`let` is a *statement*. It may appear inside a block, but not at module scope. Top-level bindings use `const` and `static` (see §Top-level Bindings).
 
 - Simple binding: `let x = expr;` (equivalent to `set x = expr;`)
 - Tuple destructuring: `let (x, y) = tuple_expr;`
@@ -3053,6 +3305,12 @@ site) — this information is already computed during inference and incurs
 zero additional cost. Index mismatch errors include the conflicting
 equalities from the GADT context or ghost index constraints.
 
+**Shared-state diagnostics:** Accessing a `Global` without declaring the
+corresponding `@shared` effect, accessing a `Global` from `@pure` or
+`isolate`, or accessing a blocking `Global` from `@interrupt` are all
+reported with the offending global's name and — at L2 — the full access
+chain from the declaration to the violating site.
+
 ## Undefined Behavior Prevention
 
 | UB Category | Prevention Mechanism |
@@ -3062,7 +3320,7 @@ equalities from the GADT context or ghost index constraints.
 | Division by zero | Contract `requires b != 0` enforced at compile time or via runtime panic. |
 | Null pointer dereference | References are non‑null; `Option<&T>` enforces checking before use. |
 | Dangling pointers | Borrow checker; default copy semantics reduce accidental moves. |
-| Data races | `&mut T` is exclusive, `&T` is shared; compile‑time borrow rules. |
+| Data races | `&mut T` is exclusive, `&T` is shared; compile‑time borrow rules. Top-level mutable state must go through `Global<T, P>` with a declared `@shared` effect, so it is never invisible to the compiler. |
 | Buffer overflow | Array access checked via contract or runtime bounds; pointer arithmetic constrained to explicit `Ptr` types. |
 | Invalid enum values | Type invariants. |
 | Misaligned pointers | `Ptr` type carries alignment; safe casts check alignment; `as!` demands proof of alignment. In `unsafe` blocks, alignment is the programmer's responsibility. The standard library provides `from_unaligned`/`write_unaligned` for safe misaligned access. |
@@ -3070,7 +3328,7 @@ equalities from the GADT context or ghost index constraints.
 | Non‑terminating loops | `decreases` clause on loops proves strict decrease of a non‑negative measure. |
 | Non‑terminating recursion | `terminates` clause on functions proves strict decrease of the argument. |
 | Infinite loops at compile time | `comptime` execution bounded by step and memory limits. |
-| Static initialization order | Compile‑time evaluation ensures constant initializers; module‑level variables use zero‑init or type defaults. |
+| Static initialization order | All top-level initializers are compile-time constant expressions: `const`, immutable `static`, and `Global<T, P>` declarations are fully initialized before `main`. Runtime initialization is explicit, through `@init` + `Global<T, Once>`. No initialization-order fiasco exists. |
 
 Strict Mode forbids `unsafe` entirely; all contracts must be statically proven.
 
@@ -3078,6 +3336,39 @@ Strict Mode forbids `unsafe` entirely; all contracts must be statically proven.
 
 ```
 edition = "2026";
+
+const MAX_CONNECTIONS: usize = 1024;
+static VERSION: &Str = "1.0.0";
+
+// Read-only lookup table, generated at compile time
+static CRC_TABLE: [UInt<32>; 256] = build_crc_table!();
+
+// Controlled shared state
+static REQUEST_COUNTER: Global<UInt<64>, Atomic> = Global::new(0);
+static CONFIG_CACHE:    Global<Config, Mutex>    = Global::new(Config'default);
+
+@shared(REQUEST_COUNTER, read, write)
+def next_request_id() -> UInt<64>
+    ensures codomain > 0
+{
+    return REQUEST_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+}
+
+@shared(CONFIG_CACHE, read)
+@no_panic
+def cached_timeout() -> Option<UInt<32>> {
+    let guard = CONFIG_CACHE.try_lock() else { return None; };
+    return Some(guard.timeout);
+}
+
+@pure
+def crc32(data: &[Byte]) -> UInt<32> {
+    set mut c: UInt<32> = 0xFFFFFFFF;
+    for b in data {
+        c = CRC_TABLE[((c ^ (*b as UInt<32>)) & 0xFF) as usize] ^ (c >> 8);
+    }
+    return c ^ 0xFFFFFFFF;
+}
 
 type AppError = enum { IoError, ValidationError(&[Byte]) }
 
@@ -3199,7 +3490,7 @@ def main() -> Result<(), AppError> {
 - **From ATS:** The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
 - **From F\*, DML, ATS:** erased value indices — types may mention runtime values with all type-level dependency discharged at compile time (F\*/DML) and invariants encoded in types (ATS).
 
-**Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave` / `leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), nested GADT refinement rules, graded function types with mechanical propagation, Lease modality, ghost value indices, unified grade lattice (value / ghost / const / contract as four channels), I/O effect aliases, audit rules, floating-point overflow control (trap/ieee/saturate), compile-time floating-point exception detection, Two-Phase Borrows, Point-level liveness, Temporary view freeze, Place-level move semantics (partial move with Full/Partial/Moved tracking for structs, arrays, and enums), `where` type equality constraints, generic parameter generality, ASCII-only `\x` in text literals with byte-exact `b"..."`, hard-error escape recovery, three-layer whitespace/BOM semantics, edition-frozen Unicode tables, and more.
+**Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave` / `leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), nested GADT refinement rules, graded function types with mechanical propagation, Lease modality, ghost value indices, unified grade lattice (value / ghost / const / contract as four channels), I/O effect aliases, audit rules, floating-point overflow control (trap/ieee/saturate), compile-time floating-point exception detection, Two-Phase Borrows, Point-level liveness, Temporary view freeze, Place-level move semantics (partial move with Full/Partial/Moved tracking for structs, arrays, and enums), `where` type equality constraints, generic parameter generality, ASCII-only `\x` in text literals with byte-exact `b"..."`, hard-error escape recovery, three-layer whitespace/BOM semantics, edition-frozen Unicode tables, immutable top-level bindings (`const`, `static`) with no `static mut`, `Global<T, P>` controlled shared state, and the `@shared` effect with read/write granularity.
 
 ## Design Q&A
 
@@ -3261,7 +3552,7 @@ A: Yes, the global `--runtime-contracts` flag and the per‑function `@runtime_c
 
 **Q: How does Posita interact with WCET analysis?**
 
-A: Posita generates highly deterministic code and exports detailed metadata (CFG, loop bounds, etc.) via `--emit-timing-info`. Professional WCET tools like aiT consume this metadata to produce precise timing results.
+A: Posita generates highly deterministic code and exports detailed metadata (CFG, loop bounds, etc.) via `--emit-timing-info`. Professional WCET tools like aiT consume this metadata to produce precise timing results. Read‑only `@shared(NAME, read)` accesses are distinguished from writes, because only the latter introduce cache‑coherence and barrier non‑determinism.
 
 **Q: How does Posita compare to Moonbit's formal verification?**
 
@@ -3305,11 +3596,11 @@ A: No. `@trusted` is a declaration‑site attribute on function definitions. Cal
 
 **Q: What is the difference between `set` and `let`?**
 
-A: `set` is the general variable declaration, defaulting to immutability but allowing `set mut`. `let` is a restricted, always‑immutable form that additionally supports pattern destructuring (tuples, structs, enum variants with mandatory `else`). `let` always requires an explicit initializer and cannot use a type's default value. Use `set` for general purposes; use `let` when you need destructuring or want to enforce immutability at a glance.
+A: `set` is the general variable declaration, defaulting to immutability but allowing `set mut`. `let` is a restricted, always‑immutable form that additionally supports pattern destructuring (tuples, structs, enum variants with mandatory `else`). `let` always requires an explicit initializer and cannot use a type's default value. Use `set` for general purposes; use `let` when you need destructuring or want to enforce immutability at a glance. Both are *statements* — they may appear inside a block, but not at module scope. Top-level bindings use `const` and `static`.
 
 **Q: What are the fine‑grained effect annotations?**
 
-A: `@pure`, `@io(read)`, `@io(write)`, `@io`, `@alloc`, `@no_alloc`, `@no_alloc_error`, `@no_panic`, `@diverges`, `@audit_log`, and `@trusted` describe a function's side effects. The compiler checks these annotations for consistency, giving reviewers a precise summary of what a function can do without reading its body.
+A: `@pure`, `@shared`, `@io(read)`, `@io(write)`, `@io`, `@alloc`, `@no_alloc`, `@no_alloc_error`, `@no_panic`, `@diverges`, `@audit_log`, and `@trusted` describe a function's side effects. The compiler checks these annotations for consistency, giving reviewers a precise summary of what a function can do without reading its body.
 
 **Q: How are slices passed to `extern "C"` functions?**
 
@@ -3369,7 +3660,7 @@ A: Use the `42i32` suffix for `Int<32>` or `0xFFu8` for `UInt<8>`. This is synta
 
 **Q: What is the `isolate` block?**
 
-A: An `isolate` block guarantees that the enclosed code does not access any external mutable state. The compiler verifies this statically, enabling safe concurrent execution from multiple interrupt or task contexts.
+A: An `isolate` block guarantees that the enclosed code does not access any external mutable state. The compiler verifies this statically, enabling safe concurrent execution from multiple interrupt or task contexts. Accessing a `Global` inside an `isolate` block is a compile error.
 
 **Q: What is conditional compilation (`@cfg`)?**
 
@@ -3421,7 +3712,7 @@ A: MMIO reads and writes are implicitly `@io(read)` and `@io(write)`, respective
 
 **Q: How are interrupt handlers constrained?**
 
-A: The compiler enforces that interrupt handlers satisfy the constraints of `@no_alloc` and `@no_panic`, and have the return type `!`. They cannot have custom parameters. The compiler generates the interrupt vector table from `@interrupt` annotations.
+A: The compiler enforces that interrupt handlers satisfy the constraints of `@no_alloc` and `@no_panic`, and have the return type `!`. They cannot have custom parameters. Interrupt handlers may only access `Global` with the `Atomic` strategy; `Mutex`/`RwLock` are forbidden. The compiler generates the interrupt vector table from `@interrupt` annotations.
 
 **Q: Why does Posita have `!` but no `unit` type?**
 
@@ -3542,3 +3833,23 @@ A: Because `\x` means *byte* everywhere. In a `Str`, allowing `\x80`–`\xFF` wo
 **Q: Is `\x0B` whitespace? Is BOM whitespace?**
 
 A: `\x0B` (VT, U+000B) is value-level whitespace (`White_Space=yes`) and is also lexical whitespace, but `capsa audit` flags its occurrence position. BOM (U+FEFF) is never whitespace: it is a UTF‑8 signature allowed only at the beginning of a file, where the lexer strips it. Non-ASCII Unicode whitespace is rejected by default. These three layers — value, lexical, encoding — are deliberately distinct and edition-frozen.
+
+**Q: Why can't top-level `set mut` be used for a mutable global?**
+
+A: Because a top-level `mut` binding would be a module-scope, globally visible, program-lifetime mutable slot. It would silently break `@pure` (the function signature no longer describes what the function does), `isolate` ("no external mutable state" would no longer be statically verifiable), `@no_panic` and WCET (multi-context contention introduces unpredictable latency), the no-UB promise (data races across tasks and interrupts, static initialization order fiasco), and auditability (implicit coupling between modules that cannot be traced). The design instead places mutability *in the type* — `Global<T, P>` — and makes every access a `@shared` effect, so purity, isolation, WCET, and audit all stay intact. Top-level bindings have existence, not mutability.
+
+**Q: What is `static` in Posita, and how does it differ from Rust?**
+
+A: `static` declares a runtime storage location with a fixed address; `&NAME` yields a `&'static T`. Unlike Rust, Posita has no `static mut` — `static` is always an immutable binding. Mutability, when needed, is carried by the type: `static NAME: Global<T, P> = Global::new(...)` gives an immutable binding whose interior is mutable, with every access surfaced as a `@shared` effect. `static` initializers must be compile-time constant expressions (literals, `const` items, `comptime` function calls with `!`, or `T'default`), eliminating the C++ static-initialization-order fiasco entirely. Runtime initialization is explicit, through `@init` + `Global<T, Once>`.
+
+**Q: Why does Posita distinguish `const` from `static`?**
+
+A: `const` has no runtime storage: uses are inlined at compile time, and no address exists. `static` has exactly one storage location with a fixed address, and `&NAME` is a `&'static T`. These are two distinct existence classes — "compile-time only" vs. "runtime storage" — and collapsing them would lose the crucial information of whether the binding has an address. Both are immutable bindings; neither is a variable in the `set mut` sense.
+
+**Q: How does `@shared` differ from `@io` and `@pure`?**
+
+A: `@shared` is a function-level effect in the same family as `@io`, `@alloc`, and `@pure`, and it records access to shared mutable state. It propagates through the call chain mechanically, like `@io` in strict mode. Unlike `@io` (external I/O), `@shared` is about internal program state shared across tasks, interrupts, or threads. `@pure` is mutually exclusive with any `@shared`: reading a mutable global is not pure, even if the read does not change the global. `@shared` distinguishes reads from writes (`@shared(NAME, read)` vs `@shared(NAME, write)`) because WCET analysis needs the distinction — read-only accesses do not incur coherence traffic.
+
+**Q: Why is `@shared` not a strategy-agnostic flag?**
+
+A: Because the strategy determines which contexts can access a `Global` at all. An `@interrupt` handler may only use `Atomic`; `Mutex` and `RwLock` are forbidden (blocking, priority inversion). A `@no_panic` function may only use `try_lock`, never `lock`. A `Global<T, UnsafeCell>` is legal only inside `@trusted` or `isolate`. These rules are enforced by the strategy parameter `P` of `Global<T, P>`, which is part of the type. A strategy-agnostic `@shared` would lose this information and force the checker to inspect the `Global`'s type at each call site anyway; making the strategy explicit in the type makes the rule dispatch direct.
