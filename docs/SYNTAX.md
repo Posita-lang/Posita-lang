@@ -1,5 +1,5 @@
 # Posita Language Syntax
-Document revision: 2026-10-25 (working draft, not a frozen specification)
+Document revision: 2026-10-28 (working draft, not a frozen specification)
 
 > This revision integrates the lexical decisions on `\x` range, escape
 > recovery, and whitespace/BOM handling. Breaking lexical changes:
@@ -11,6 +11,8 @@ Document revision: 2026-10-25 (working draft, not a frozen specification)
 > also introduces top-level bindings (`const`, immutable `static`, and
 > `static NAME: Global<T, P>` for controlled shared state) and the
 > `@shared` effect.
+>
+> Raw pointers now carry an explicit mutability: `Ptr<...> with mutability = const | mut`; `*const T` / `*mut T` are sugar; bare `*T` is deprecated as a synonym for `*const T`.
 
 [!NOTE]
 This document version tracks its own edits. It does not correspond to a language specification release.
@@ -46,7 +48,7 @@ Posita is a ultra‑static, systems programming language where the programmer ex
 `catch`, `panic`, `unsafe`, `let`, `finally`, `static`, `const`,
 `where`, `requires`, `ensures`, `invariant`, `constraint`, `move`, `dyn`, `by`, `copy`, `ref`, `mut`, `ro`, `wrap`, `saturate`, `trap`, `Self`, `no_default`, `extern`, `pub`, `edition`, `deprecated`, `experimental`, `endian`, `bit_order`, `align`, `pad`, `packed`, `async`, `await`, `task`, `channel`, `linear`, `consume`, `pure`, `io`, `trusted`, `ghost`, `scope_cleanup`, `trigger`, `validate`, `missing_match`, `apply_lemma`, `exists`, `implies`, `trait`, `impl`, `decreases`, `terminates`, `cfg`, `isolate`, `hint`, `must_use`, `must_handle`, `link_proof`, `exhaustive`, `no_alloc_error`, `no_panic`, `debug_info`, `old`, `codomain`, `audit_log`, `interrupt`, `ieee`, `ieee_contracts`, `diverges`, `propagates`, `poly`, `unbox`, `overrides`, `layout`, `when`, `const`, `forall`
 
-`Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words. `ro` is a keyword, used only in the `&ro` read‑only borrow operator. `linear`, `consume` are planned keywords; `by` is reserved for closure capture syntax. `static` is a top‑level binding keyword; it has no meaning inside a block.
+`Int`, `UInt`, `Ptr`, `Str`, `String`, `Result`, `Option`, `usize`, `Float` are built‑in type constructors, not reserved words. `ro` is a keyword, used only in the `&ro` read‑only borrow operator. `linear`, `consume` are planned keywords; `by` is reserved for closure capture syntax. `static` is a top‑level binding keyword; it has no meaning inside a block. `mut` and `const` are keywords used both in variable/binding declarations and as the two values of the `mutability` parameter of `Ptr`; `mutability` itself is not a keyword.
 
 ### Identifiers
 
@@ -597,12 +599,40 @@ while `overflow` affects runtime behavior and `comptime` evaluation.
 
 ### Pointers and References
 
-Raw pointer type: `Ptr<size = SizeType, pointee = PointeeType>`
+Raw pointer type: `Ptr<size = SizeType, pointee = PointeeType> with mutability = const | mut`
 
 - `size`: type that determines the pointer's own width (e.g., `UInt<16>`).
 - `pointee`: the type it points to.
+- `mutability`: `const` (read‑only through this pointer) or `mut` (write‑through permitted). Defaults to `const`.
 
-Syntactic sugar: `*T` is a platform‑word‑sized pointer to `T`.
+Syntactic sugar: `*const T` and `*mut T` are platform‑word‑sized pointers to `T` with `mutability = const` and `mutability = mut`, respectively:
+
+```
+*const T ≡ Ptr<pointee = T> with mutability = const
+*mut T   ≡ Ptr<pointee = T> with mutability = mut
+```
+
+The bare form `*T` is a deprecated alias for `*const T`; new code must write `*const T` or `*mut T` explicitly. The working draft retains `*T` in older examples only for readability; the compiler emits a deprecation warning and `capsa audit` flags it.
+
+Mutability is part of the pointer's type. `*const T` and `*mut T` are distinct types; neither is a subtype of the other. A `*mut T` may be downgraded to `*const T` implicitly; the reverse requires an explicit `as!` cast (see §Expressions) or a dedicated `unsafe` helper, and is flagged by `capsa audit`.
+
+**Variance.** `*const T` is covariant in `T` (a `*const Cat` may be used where a `*const Animal` is expected); `*mut T` is invariant in `T` (writing through `*mut Animal` could otherwise place a `Dog` into memory typed as `Cat`). The `Ptr<...>` form follows its `mutability` parameter: `with mutability = const` is covariant, `with mutability = mut` is invariant. If the implementation does not yet perform variance checking, all pointer types are treated as invariant; the covariance of `*const T` is an optimization, not a semantic guarantee relied upon by user code.
+
+**Read and write through pointers.** Dereferencing a `*const T` yields an immutable place; assignment through it (`*p = v`) is a compile-time error. Dereferencing a `*mut T` yields a mutable place. Both dereference operations require an `unsafe` context or an `@trusted` function; mutability does not remove the `unsafe` requirement, it only records the intended access mode in the type.
+
+**Conversions.**
+
+| From | To | Rule |
+|---|---|---|
+| `&T` | `*const T` | safe |
+| `&mut T` | `*mut T` | safe |
+| `&mut T` | `*const T` | safe (downgrade) |
+| `*mut T` | `*const T` | safe (downgrade) |
+| `*const T` | `*mut T` | `as!` (bitcast, flagged by `capsa audit`) or `unsafe` helper |
+| `Ptr<..., const>` | `Ptr<..., mut>` | `as!` (flagged) |
+| `Ptr<..., mut>` | `Ptr<..., const>` | safe |
+
+`safe` here means the cast itself is checked by the compiler; dereferencing the result remains `unsafe`.
 
 References: `&T` (immutable), `&mut T` (mutable). References are checked at compile time and do not support pointer arithmetic. No null references are allowed; use `Option<&T>` for nullable semantics.
 
@@ -616,10 +646,10 @@ Pointer arithmetic is permitted only within `unsafe` blocks and is subject to th
 
 | Expression | Semantics |
 |---|---|
-| `ptr + offset` | Advances `ptr` by `offset` elements of type `Pointee`. `offset` must be of type `Ptr::size` or implicitly convertible to it. |
-| `ptr - offset` | Reverses `ptr` by `offset` elements. Same type constraint on `offset`. |
-| `ptr1 - ptr2` | Returns the number of `Pointee` elements between `ptr1` and `ptr2`. Both pointers must have the same `pointee` type. Result type is `Ptr::size`. |
-| `ptr[i]` | Equivalent to `*(ptr + i)`. `i` is subject to the same type constraint as `offset`. |
+| `ptr + offset` | Advances `ptr` by `offset` elements of type `Pointee`. `offset` must be of type `Ptr::size` or implicitly convertible to it. The result has the same `mutability` as `ptr`. |
+| `ptr - offset` | Reverses `ptr` by `offset` elements. Same type constraint on `offset`. The result has the same `mutability` as `ptr`. |
+| `ptr1 - ptr2` | Returns the number of `Pointee` elements between `ptr1` and `ptr2`. Both pointers must have the same `pointee` type; their `mutability` may differ (the subtraction is read‑only). Result type is `Ptr::size`. |
+| `ptr[i]` | Equivalent to `*(ptr + i)` for reading. Writing (`ptr[i] = v`) additionally requires `ptr` to be `*mut T` (or `Ptr<..., mut>`), and the write itself requires `unsafe`. |
 
 **Prohibited operations**
 
@@ -634,11 +664,13 @@ The following are rejected at compile time:
 
 The compiler emits a diagnostic if the result of pointer arithmetic can be statically proven to be misaligned for the `pointee` type. For runtime offsets, the programmer must guarantee alignment via contract or manual assertion; violation results in undefined behavior.
 
+Writing through a `*mut T` obtained from pointer arithmetic is still subject to the `unsafe` contract; mutability is an intent marker, not a safety guarantee.
+
 Bounds checking is never performed for pointer arithmetic. Use array types (`[T; N]`) or slices (`&[T]`) for safe, bounds‑checked indexing.
 
 **Minimum addressable unit**
 
-References (`&T`, `&mut T`) and pointers (`*T`, `Ptr<pointee = T>`) require `T` to have a bit‑width of at least 8. Types narrower than one byte (e.g., `Int<3>`, `UInt<4>`) are value‑only types and cannot be the target of a reference or pointer. Bit‑fields in `@packed` structs are accessed through the enclosing struct, not by direct reference.
+References (`&T`, `&mut T`) and pointers (`*const T`, `*mut T`, `Ptr<pointee = T>`) require `T` to have a bit‑width of at least 8. Types narrower than one byte (e.g., `Int<3>`, `UInt<4>`) are value‑only types and cannot be the target of a reference or pointer. Bit‑fields in `@packed` structs are accessed through the enclosing struct, not by direct reference.
 
 ### Reference Coercion and Read-Only Borrows
 
@@ -853,7 +885,7 @@ A type may refer to itself through `Self` inside its definition:
 ```
 type ListNode = struct {
     value: Int<32>,
-    next: Option<Ptr<size=UInt<64>, pointee=Self>>,
+    next: Option<*mut Self>,   // or: Option<Ptr<size = UInt<64>, pointee = Self> with mutability = mut>
 };
 ```
 
@@ -1263,7 +1295,7 @@ In the `Slice` branch, the compiler knows `T == [X]` for the existential `X`, an
 
 Fine‑grained control for hardware registers and protocols:
 
-- **Packing**: `@packed` removes all padding between fields, ensuring minimal memory footprint. Restriction: `@packed` cannot be applied to structs that contain reference types (`&T`, `&mut T`, `&[T]`, `&mut [T]`). If you need a compact layout with indirection, use `Ptr` instead.
+- **Packing**: `@packed` removes all padding between fields, ensuring minimal memory footprint. Restriction: `@packed` cannot be applied to structs that contain reference types (`&T`, `&mut T`, `&[T]`, `&mut [T]`). If you need a compact layout with indirection, use `Ptr` (with either mutability) instead.
 - **Endianness:** `@endian(little)` or `@endian(big)`.
 - **Bit order:** `@bit_order(lsb_to_msb)` or `@bit_order(msb_to_lsb)`. This attribute only applies to bit‑fields inside `@packed` structs.
 - **Alignment:** `@align(N)` overrides natural alignment. `N` must be a power of two.
@@ -1404,7 +1436,7 @@ The strategy `P` determines the available operations and the context restriction
 |---|---|---|---|
 | `Atomic` | `T` is atomically accessible (integers, pointers, Bool) | `load`/`store`/`fetch_add`/`compare_exchange`, each requiring an `Ordering` | `@pure`, `isolate` |
 | `Mutex` / `RwLock` | any `T` | `try_lock` / `lock`, returning a `@linear` guard | `@pure`, `isolate`, `@interrupt` (blocking), `@no_panic` (only `try_lock`) |
-| `UnsafeCell` | any `T` | raw access, only inside `@trusted` or `isolate` | `@pure`, non-`@trusted` |
+| `UnsafeCell` | any `T` | raw access, only inside `@trusted` or `isolate`; `get` returns `*mut T` | `@pure`, non-`@trusted` |
 | `Once` | any `T` | `init` / `get` (the latter requires `is_initialized()` to be proven) | see §Runtime initialization |
 
 Memory orderings are never defaulted; they must be written out:
@@ -1457,7 +1489,7 @@ require_sync = ["crypto::**"]            # shared access in these modules must u
                                          # SeqCst/AcqRel
 ```
 
-**Why distinguish reads from writes:** WCET analysis needs to separate read-only access (no cache-coherence traffic, predictable latency) from writes (memory barriers, coherence, non-determinism). `@pure` is incompatible with all `@shared` (reading a mutable global is not pure), but audit and WCET tooling need the finer granularity.
+**Why distinguish reads from writes:** WCET analysis needs to separate read-only access (no cache-coherence traffic, predictable latency) from writes (memory barriers, coherence, non-determinism). `@pure` is incompatible with all `@shared` (reading a mutable global is not pure), but audit and WCET tooling need the finer granularity. The `*const T` / `*mut T` distinction provides the same granularity for raw pointer parameters: a `*const T` can be passed to LLVM as `readonly`, a `*mut T` cannot.
 
 ### Runtime initialization
 
@@ -1522,7 +1554,7 @@ The `Global<T, P>` path is an escape hatch, not the default. Existing mechanisms
 - **Dependency injection:** pass configuration, loggers, and allocators explicitly, or aggregate them into a `Context` struct. `@pure` functions stay pure.
 - **`task` + `Channel`:** concurrent communication is by message passing, not shared memory. A `Channel` may itself be `static`, but its type is a synchronous queue with its own access discipline, not a bare mutable binding.
 - **`Lease<T, N>`:** resources that need a bounded number of uses use `Lease`; conservation is compiler-verified, with no global mutable binding.
-- **MMIO:** hardware registers are not variables; they are `Ptr`/`@volatile` accesses marked `@io(read/write)`, confined to `unsafe` + `@trusted`. Do not open a top-level `mut` loophole for MMIO.
+- **MMIO:** hardware registers are not variables; they are `*mut T` / `@volatile` accesses marked `@io(read/write)`, confined to `unsafe` + `@trusted`. Do not open a top-level `mut` loophole for MMIO.
 
 ```
 // Preferred: explicit Context
@@ -1811,12 +1843,21 @@ Outside of `@trusted` code, `dyn Trait` is rejected in strict mode. In non‑str
 
 ### `extern "C"` ABI Rules
 
-All `extern "C"` function declarations are inherently unsafe and can only be called inside `unsafe` blocks or `@trusted` functions. When a reference type (`&T`, `&[T]`, `&mut T`, `&mut [T]`) appears in the signature of an `extern "C"` function, the compiler automatically converts it to the corresponding raw C pointer for the call:
+All `extern "C"` function declarations are inherently unsafe and can only be called inside `unsafe` blocks or `@trusted` functions. The pointer type in the declaration must reflect the C signature's constness:
+
+| Posita type | C type |
+|---|---|
+| `&T`, `&[T]`, `*const T` | `const T*` |
+| `&mut T`, `&mut [T]`, `*mut T` | `T*` |
+
+When a reference type (`&T`, `&[T]`, `&mut T`, `&mut [T]`) appears in the signature of an `extern "C"` function, the compiler automatically converts it to the corresponding raw C pointer for the call:
 
 - `&T` and `&[T]` become `*const T`
 - `&mut T` and `&mut [T]` become `*mut T`
 
 The length component of slices is discarded. The caller is responsible for ensuring that the data satisfies any additional C‑side requirements (e.g., null termination for `puts`). This conversion is deterministic and does not constitute an implicit runtime check.
+
+A bare `Ptr<...>` whose `size` is not the target platform's pointer width cannot appear in an `extern "C"` signature; the ABI has no representation for such a pointer. Convert to `*const T` / `*mut T` explicitly at the boundary, or declare the `size` as `usize`.
 
 ## Traits and Implementations
 
@@ -2793,11 +2834,11 @@ Logical: `and`, `or`, `not`
 
 Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
 
-Dereference: `*ptr`
+Dereference: `*ptr` (read through any pointer; write only through `*mut T` / `Ptr<..., mut>`; both require `unsafe`)
 
-Address‑of: `&var`
+Address‑of: `&var`, `&mut var`
 
-Cast: `value as NewType` (safe), `value as! NewType` (bitcast)
+Cast: `value as NewType` (safe), `value as! NewType` (bitcast). Pointer mutability downgrade is a safe `as`; upgrade (`*const T` → `*mut T`) requires `as!`.
 
 Rounding suffixes for float‑to‑int conversion appear after the target type in an `as` cast:
 
@@ -2827,9 +2868,11 @@ value as Int<32> floor   // floor
 
 **`as!` layout compatibility:** The compiler verifies that the source and target types have the same size and alignment via `layout_of!`, or, in the case of truncation, that the truncated value does not violate the target type's `invariant`. All uses of `as!` are flagged by `capsa audit` for mandatory human review.
 
+**`as!` pointer mutability:** Casting `*const T` to `*mut T` (or `Ptr<..., const>` to `Ptr<..., mut>`) requires `as!`; the reverse direction is a safe `as`. Both the pointer's `size` and `pointee` must match. The cast does not dereference; the result still requires `unsafe` to use.
+
 **Alignment compatibility:** The compiler also verifies that the target
 type's alignment is not stricter than the source type's alignment, unless
-the source is a raw pointer (`*T` or `Ptr<...>`) and the entire cast
+the source is a raw pointer (`*const T`, `*mut T`, or `Ptr<...>`) and the entire cast
 plus the subsequent dereference are contained within an `unsafe` block.
 In `unsafe` blocks, the programmer assumes full responsibility for
 ensuring that the resulting pointer is correctly aligned for its type;
@@ -3324,6 +3367,7 @@ chain from the declaration to the violating site.
 | Buffer overflow | Array access checked via contract or runtime bounds; pointer arithmetic constrained to explicit `Ptr` types. |
 | Invalid enum values | Type invariants. |
 | Misaligned pointers | `Ptr` type carries alignment; safe casts check alignment; `as!` demands proof of alignment. In `unsafe` blocks, alignment is the programmer's responsibility. The standard library provides `from_unaligned`/`write_unaligned` for safe misaligned access. |
+| Invalid raw pointer write | `*const T` dereference is read-only; assignment through a `*const T` is a compile-time error. Writing requires `*mut T`. Both dereference and write remain `unsafe`; mutability is an intent marker, not a safety guarantee. |
 | Type punning / transmute | `as!` requires compile‑time verification of layout compatibility. |
 | Non‑terminating loops | `decreases` clause on loops proves strict decrease of a non‑negative measure. |
 | Non‑terminating recursion | `terminates` clause on functions proves strict decrease of the argument. |
@@ -3485,12 +3529,12 @@ def main() -> Result<(), AppError> {
 ## Relationship to Other Languages
 
 - **From Ada:** explicit representation control, attribute syntax, contract‑based verification, default initialization, traceability.
-- **From Rust:** `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker.
+- **From Rust:** `Result`‑based error handling (without type erasure), `if let`, `match`, trait‑like generics, borrow checker, explicit const/mut raw‑pointer distinction (`*const T` / `*mut T`).
 - **From Zig:** The `comptime` mechanism and the philosophy of moving work to compile time are direct inspirations. Posita adds the `!` call marker and integrates `comptime` with SMT‑based contract verification, going beyond what Zig's comptime offers.
 - **From ATS:** The ambition to eliminate runtime errors through static proofs and the practice of encoding invariants in types. ATS2's template system and its removal of GC demonstrate the viability of advanced type systems in resource‑constrained, no‑runtime environments. Posita diverges by separating compile‑time computation (`comptime`) from declarative code generation (`generate`) and replacing explicit proof terms with SMT‑based automation, trading some expressive power for a lower annotation burden and stronger auditability.
 - **From F\*, DML, ATS:** erased value indices — types may mention runtime values with all type-level dependency discharged at compile time (F\*/DML) and invariants encoded in types (ATS).
 
-**Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes, type‑level defaults with invariants and `no_default`, `leave` / `leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), nested GADT refinement rules, graded function types with mechanical propagation, Lease modality, ghost value indices, unified grade lattice (value / ghost / const / contract as four channels), I/O effect aliases, audit rules, floating-point overflow control (trap/ieee/saturate), compile-time floating-point exception detection, Two-Phase Borrows, Point-level liveness, Temporary view freeze, Place-level move semantics (partial move with Full/Partial/Moved tracking for structs, arrays, and enums), `where` type equality constraints, generic parameter generality, ASCII-only `\x` in text literals with byte-exact `b"..."`, hard-error escape recovery, three-layer whitespace/BOM semantics, edition-frozen Unicode tables, immutable top-level bindings (`const`, `static`) with no `static mut`, `Global<T, P>` controlled shared state, and the `@shared` effect with read/write granularity.
+**Unique to Posita**: bit‑width parameterized integers with explicit overflow control, orthogonal pointer sizes and explicit const/mut raw‑pointer distinction (`*const T` / `*mut T`, `Ptr with mutability`), type‑level defaults with invariants and `no_default`, `leave` / `leave with`, type capture, fully static error monomorphization, compile‑time type factories, reflection, structured `finally` blocks, systematic UB elimination, optional strict mode, ghost variables, specification tags, named scope cleanup with compile‑time guards, construction validation, lemma functions, fine‑grained effect annotations, deferred contract checking (`@runtime_check`), layout reflection (`layout_of!`), layout aliases (`layout`), proof hints (`@hint`), fine‑grained error accountability (`@must_handle`), tiered diagnostics, implicit invariant propagation, `old()` expressions, fixed‑precision rationals, MMIO types, interrupt vector generation, `@diverges` for deterministic non‑returning functions, first‑class polymorphism (`poly`/`unbox`) with let‑generalization, GADTs with `when` constraints and existential quantification, affine and linear types (`@linear`), codomain keyword with path labels (`@label`), slice patterns, const generics, TAIT, HRTB, generic associated types (GAT), explicit read‑only borrows (`&ro`), nested GADT refinement rules, graded function types with mechanical propagation, Lease modality, ghost value indices, unified grade lattice (value / ghost / const / contract as four channels), I/O effect aliases, audit rules, floating-point overflow control (trap/ieee/saturate), compile-time floating-point exception detection, Two-Phase Borrows, Point-level liveness, Temporary view freeze, Place-level move semantics (partial move with Full/Partial/Moved tracking for structs, arrays, and enums), `where` type equality constraints, generic parameter generality, ASCII-only `\x` in text literals with byte-exact `b"..."`, hard-error escape recovery, three-layer whitespace/BOM semantics, edition-frozen Unicode tables, immutable top-level bindings (`const`, `static`) with no `static mut`, `Global<T, P>` controlled shared state, and the `@shared` effect with read/write granularity.
 
 ## Design Q&A
 
@@ -3512,7 +3556,7 @@ A: `unsafe` is confined, requiring `@trusted` with contracts. Strict Mode disall
 
 **Q: How do you handle C ABI?**
 
-A: `extern "C"` functions are inherently unsafe and require `unsafe` blocks or `@trusted` wrappers with contracts. Standard library provides safe wrappers. Strict Mode can forbid them entirely.
+A: `extern "C"` functions are inherently unsafe and require `unsafe` blocks or `@trusted` wrappers with contracts. Standard library provides safe wrappers. Strict Mode can forbid them entirely. The `*const T` / `*mut T` distinction lets the declaration preserve the C signature's `const`-ness: `*const T` → `const T*`, `*mut T` → `T*`.
 
 **Q: How do you prevent array out‑of‑bounds?**
 
@@ -3524,7 +3568,7 @@ A: Fast mode (default) skips SMT proofs; strict mode enables them with time budg
 
 **Q: How does the module system work?**
 
-A: File‑based, private by default, no wildcard imports. Dependencies are explicitly declared in `posita.toml`, enabling whole‑program analysis.
+A: File‑based, private by default, no wildcard imports. Dependencies are explicitly declared in `posita.toml`, enabling whole-program analysis.
 
 **Q: How does Posita support formal verification?**
 
@@ -3552,7 +3596,7 @@ A: Yes, the global `--runtime-contracts` flag and the per‑function `@runtime_c
 
 **Q: How does Posita interact with WCET analysis?**
 
-A: Posita generates highly deterministic code and exports detailed metadata (CFG, loop bounds, etc.) via `--emit-timing-info`. Professional WCET tools like aiT consume this metadata to produce precise timing results. Read‑only `@shared(NAME, read)` accesses are distinguished from writes, because only the latter introduce cache‑coherence and barrier non‑determinism.
+A: Posita generates highly deterministic code and exports detailed metadata (CFG, loop bounds, etc.) via `--emit-timing-info`. Professional WCET tools like aiT consume this metadata to produce precise timing results. Read‑only `@shared(NAME, read)` accesses are distinguished from writes, because only the latter introduce cache‑coherence and barrier non‑determinism. The `*const T` / `*mut T` distinction gives the same read/write granularity for raw pointer parameters.
 
 **Q: How does Posita compare to Moonbit's formal verification?**
 
@@ -3604,7 +3648,7 @@ A: `@pure`, `@shared`, `@io(read)`, `@io(write)`, `@io`, `@alloc`, `@no_alloc`, 
 
 **Q: How are slices passed to `extern "C"` functions?**
 
-A: `&[T]` and `&mut [T]` are automatically converted to `*const T` and `*mut T` at the ABI boundary, with the length component discarded. This is a deterministic, compiler‑enforced rule; the programmer must ensure the data meets the C function's expectations (e.g., null termination).
+A: `&[T]` and `&mut [T]` are automatically converted to `*const T` and `*mut T` at the ABI boundary, with the length component discarded. Raw pointers `*const T` / `*mut T` map directly to `const T*` / `T*`. This is a deterministic, compiler‑enforced rule; the programmer must ensure the data meets the C function's expectations (e.g., null termination).
 
 **Q: What is `usize`?**
 
@@ -3692,7 +3736,7 @@ A: The compiler provides three diagnostic levels (L1: locate, L2: explain with c
 
 **Q: When is `as!` safe to use?**
 
-A: The compiler verifies that source and target types have the same size and alignment, or that a truncation does not violate the target type's `invariant`. All uses of `as!` are flagged for human review by `capsa audit`. For alignment‑unsafe casts involving raw pointers, the operation must be placed in an `unsafe` block.
+A: The compiler verifies that source and target types have the same size and alignment, or that a truncation does not violate the target type's `invariant`. All uses of `as!` are flagged for human review by `capsa audit`. For alignment‑unsafe casts involving raw pointers, the operation must be placed in an `unsafe` block. For pointer mutability upgrades (`*const T as! *mut T`), the cast is permitted inside `unsafe` and flagged by `capsa audit`; the subsequent dereference is still `unsafe`.
 
 **Q: How is audit logging handled?**
 
@@ -3825,6 +3869,18 @@ A: `const` parameters are compile-time known, shape layout, and monomorphize. Gh
 **Q: Is grade inference "implicit" in the bad sense?**
 
 A: No. Inference is analysis (facts, never entering signatures); declaration is commitment (enters the type, constrains callers). Same relation as type inference vs. type annotations.
+
+**Q: Why does `Ptr` carry `mutability` instead of having separate `*const`/`*mut` types only?**
+
+A: `Ptr` is parameterized by `size` and `pointee`; `mutability` is a third axis that must be expressible for any `Ptr<...>`, including non‑platform‑width pointers (e.g., `Ptr<size = UInt<16>, pointee = T>`). The `*const T` / `*mut T` forms are sugar that expands to `Ptr<pointee = T> with mutability = ...`. Making them the only representation would split the pointer type constructor into two and prevent non‑platform‑width `Ptr` from carrying mutability. Sugar is retained for ergonomics and FFI readability; `capsa audit` displays the expanded form.
+
+**Q: Why is `*T` deprecated in favour of `*const T` / `*mut T`?**
+
+A: "Explicit over implicit" applies to pointer mutability: writing through a raw pointer is a meaningful behavior that reviewers should see. A bare `*T` would force an implicit default, and either default (`mut` or `const`) hides intent. Deprecating `*T` makes every raw pointer's access mode visible at the declaration site. Existing `*T` in the working draft is interpreted as `*const T` (the safe default) with a deprecation warning.
+
+**Q: How does pointer mutability interact with `@shared` and WCET?**
+
+A: The `*const T` / `*mut T` distinction gives `capsa audit` and WCET tools the same read/write granularity that `@shared(NAME, read)` vs. `@shared(NAME, write)` provides for globals. A `*const T` parameter can be passed to LLVM as `readonly`; a `*mut T` cannot. A `*const T` dereference cannot write, so the compiler can treat it as a pure read for coherence and barrier analysis. This is one of the reasons the distinction is worth the type-system cost.
 
 **Q: Why is `\x` ASCII-only in text literals?**
 
